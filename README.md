@@ -44,7 +44,7 @@ A single renderer supports both visualization modes and both rendering methods. 
 
 Goal: Build both datasets and get Metal environment ready.
 ### Tasks
-- Gather songs for the decades you want to represent
+- Gather songs for the decades to represent
 - Extract audio features:
     - RMS amplitude
     - LUFS loudness
@@ -78,7 +78,7 @@ Isosurface extraction working interactively on both datasets (at least Marching 
 ---
 ## Week 3 — Ray-Marched Volume Rendering + Integration
 
-Goal: Implement your second major system — GPU volume ray marching.
+Goal: Implement GPU volume ray marching.
 ### Tasks
 
 - Implement ray marching in fragment shader (Metal fragment function)
@@ -102,7 +102,7 @@ Goal: Evaluate, polish, and document.
     - runtime
     - complexity
 - Compare Marching Cubes vs. Tetrahedrons
-- Capture screenshots, figures, and renderings for your report
+- Capture screenshots, figures, and renderings for report
 - Polish UI and parameter sliders
 - Write final report:
     - methodology
