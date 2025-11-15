@@ -31,7 +31,7 @@ A full-screen ray marcher samples the 3D texture (from either mode) to produce c
 - Implemented initially in a fragment shader
 - Optional compute shader version for improved performance if time allows
 Transfer functions map scalar values to color and opacity, enabling users to highlight different loudness features.
-### 5. Unified Rendering + UI
+### Unified Rendering + UI
 A single renderer supports both visualization modes and both rendering methods. Users can toggle:
 - Trend Mode ↔ Song Mode
 - Isosurface ↔ Volume Rendering
