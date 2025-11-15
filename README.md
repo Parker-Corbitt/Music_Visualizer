@@ -1,3 +1,5 @@
+# Music Visualizer
+
 ## Abstract
 
 This project visualizes the relationship between loudness and amplitude in popular music using a dual-mode system that operates at both macro and micro scales. Audio features from representative tracks across multiple decades are processed into 3D scalar fields, which are visualized using two high-level computer graphics methods: isosurface extraction and GPU-based ray-marched volume rendering. The system supports an aggregate trend mode that shows decade-level evolutions in loudness behavior, and an individual song mode that reveals fine-scale loudness structure within each track. This provides a comprehensive visualization framework for analyzing and exploring audio dynamics through advanced rendering techniques.
