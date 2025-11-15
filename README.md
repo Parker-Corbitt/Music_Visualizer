@@ -11,7 +11,7 @@ Loudness and dynamic range in popular music have changed significantly over time
 
 This project treats loudness–amplitude behavior as a scalar field to be visualized through both isosurfaces and ray-marched volumes. Two distinct data representations feed a single unified rendering pipeline:
 ### Trend Mode (Aggregate Volume)
-Songs are grouped by decade. For each decade, amplitude, LUFS loudness, and optional frequency-band statistics are computed and aggregated into a 3D scalar field.
+Songs are grouped by decade. For each decade, audio features are computed and aggregated into a 3D scalar field.
 - **x-axis:** amplitude bin
 - **y-axis:** loudness metric 
 - **z-axis:** decade index
