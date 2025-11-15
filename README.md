@@ -46,9 +46,6 @@ Goal: Build both datasets and get Metal environment ready.
 ### Tasks
 - Gather songs for the decades to represent
 - Extract audio features:
-    - RMS amplitude
-    - LUFS loudness
-    - FFT → frequency bins
 - Build Song Mode volume (x = time, y = loudness/amplitude, z = frequency
 - Build Trend Mode volume (amplitude × loudness histograms per decade)
 - Normalize + smooth both volumes
