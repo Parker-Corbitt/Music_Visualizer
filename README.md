@@ -12,7 +12,7 @@ Loudness and dynamic range in popular music have changed significantly over time
 
 This project treats loudness–amplitude behavior as a scalar field to be visualized through both isosurfaces and ray-marched volumes. Two distinct data representations feed a single unified rendering pipeline:
 ### Trend Mode (Aggregate Volume)
-Songs are grouped by decade. For each decade, amplitude, LUFS loudness, and optional frequency-band statistics are computed and aggregated into a 3D scalar field.
+Songs are grouped by decade. For each decade, audio features are computed and aggregated into a 3D scalar field.
 - **x-axis:** amplitude bin
 - **y-axis:** loudness metric 
 - **z-axis:** decade index
@@ -34,7 +34,7 @@ A full-screen ray marcher samples the 3D texture (from either mode) to produce c
 - Implemented initially in a fragment shader
 - Optional compute shader version for improved performance if time allows
 Transfer functions map scalar values to color and opacity, enabling users to highlight different loudness features.
-### 5. Unified Rendering + UI
+### Unified Rendering + UI
 A single renderer supports both visualization modes and both rendering methods. Users can toggle:
 - Trend Mode ↔ Song Mode
 - Isosurface ↔ Volume Rendering
@@ -47,11 +47,8 @@ A single renderer supports both visualization modes and both rendering methods. 
 
 Goal: Build both datasets and get Metal environment ready.
 ### Tasks
-- Gather songs for the decades you want to represent
+- Gather songs for the decades to represent
 - Extract audio features:
-    - RMS amplitude
-    - LUFS loudness
-    - FFT → frequency bins
 - Build Song Mode volume (x = time, y = loudness/amplitude, z = frequency
 - Build Trend Mode volume (amplitude × loudness histograms per decade)
 - Normalize + smooth both volumes
@@ -81,7 +78,7 @@ Isosurface extraction working interactively on both datasets (at least Marching 
 ---
 ## Week 3 — Ray-Marched Volume Rendering + Integration
 
-Goal: Implement your second major system — GPU volume ray marching.
+Goal: Implement GPU volume ray marching.
 ### Tasks
 
 - Implement ray marching in fragment shader (Metal fragment function)
@@ -105,7 +102,7 @@ Goal: Evaluate, polish, and document.
     - runtime
     - complexity
 - Compare Marching Cubes vs. Tetrahedrons
-- Capture screenshots, figures, and renderings for your report
+- Capture screenshots, figures, and renderings for report
 - Polish UI and parameter sliders
 - Write final report:
     - methodology
