@@ -14,6 +14,11 @@ struct PointVertex {
     var padding: SIMD2<Float> = .zero  // pad to 32 bytes for alignment
 }
 
+enum RenderMode {
+    case song
+    case trend
+}
+
 struct SongPointCloudLoader {
     /// Load a song-mode point cloud from a raw float32 binary file.
     ///
@@ -81,9 +86,18 @@ class Renderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     var pipelineState: MTLRenderPipelineState!
-    var vertexBuffer: MTLBuffer!
-    var vertexCount: Int = 0
-    var currentPointCloudName: String?
+    private var activeVertexBuffer: MTLBuffer?
+    private var activeVertexCount: Int = 0
+
+    private var songVertexBuffer: MTLBuffer?
+    private var songVertexCount: Int = 0
+    private var songPointCloudName: String?
+
+    private var trendVertexBuffer: MTLBuffer?
+    private var trendVertexCount: Int = 0
+    private var trendPointCloudName: String?
+
+    private(set) var currentMode: RenderMode = .song
     var uniformBuffer: MTLBuffer!
     var camera: Camera
     var inputController: InputController!
@@ -94,9 +108,10 @@ class Renderer: NSObject, MTKViewDelegate {
     func loadSongPointCloud(at path: String) -> Bool {
         let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
         if let buffer = result.buffer, result.count > 0 {
-            self.vertexBuffer = buffer
-            self.vertexCount = result.count
-            self.currentPointCloudName = URL(fileURLWithPath: path).lastPathComponent
+            self.songVertexBuffer = buffer
+            self.songVertexCount = result.count
+            self.songPointCloudName = URL(fileURLWithPath: path).lastPathComponent
+            refreshActiveBuffersIfNeeded()
             print("[Renderer] Loaded point cloud from: \(path) (vertices: \(result.count))")
             return true
         } else {
@@ -105,10 +120,56 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Load the precomputed trend-mode point cloud.
+    @discardableResult
+    func loadTrendPointCloud(at path: String = "data/processed/trend_points.bin") -> Bool {
+        let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
+        if let buffer = result.buffer, result.count > 0 {
+            self.trendVertexBuffer = buffer
+            self.trendVertexCount = result.count
+            self.trendPointCloudName = URL(fileURLWithPath: path).lastPathComponent
+            refreshActiveBuffersIfNeeded()
+            print("[Renderer] Loaded trend point cloud from: \(path) (vertices: \(result.count))")
+            return true
+        } else {
+            print("[Renderer] Failed to load trend point cloud from: \(path)")
+            return false
+        }
+    }
+
+    /// Switch between song and trend rendering modes. Ensures buffers are loaded.
+    /// Returns true if a buffer is ready for the chosen mode.
+    @discardableResult
+    func setMode(_ mode: RenderMode) -> Bool {
+        currentMode = mode
+        switch mode {
+        case .song:
+            if songVertexBuffer == nil {
+                _ = loadInitialSongPointCloudIfAvailable()
+            }
+        case .trend:
+            if trendVertexBuffer == nil {
+                _ = loadTrendPointCloud()
+            }
+        }
+        refreshActiveBuffersIfNeeded()
+        return activeVertexBuffer != nil && activeVertexCount > 0
+    }
+
+    /// Current active point cloud name for UI display.
+    func activePointCloudName() -> String? {
+        switch currentMode {
+        case .song:
+            return songPointCloudName
+        case .trend:
+            return trendPointCloudName
+        }
+    }
+
     /// Attempt to find and load the first available .bin point cloud in common data folders.
-    /// Falls back to a small built-in demo cloud so the renderer always has something to draw.
-    func loadInitialPointCloudIfAvailable() -> String? {
-        if let existing = currentPointCloudName { return existing }
+    /// Falls back to a small built-in demo cloud so the renderer always has something to draw (song mode only).
+    func loadInitialSongPointCloudIfAvailable() -> String? {
+        if let existing = songPointCloudName { return existing }
 
         let fm = FileManager.default
         let searchRoots = [
@@ -132,8 +193,8 @@ class Renderer: NSObject, MTKViewDelegate {
 
         // Fallback: generate a simple colored cube of points to avoid an empty scene.
         makeProceduralFallbackCloud()
-        currentPointCloudName = "Procedural demo cloud"
-        return currentPointCloudName
+        songPointCloudName = "Procedural demo cloud"
+        return songPointCloudName
     }
 
     /// Build a small procedural cube of colored points as a safe default.
@@ -162,11 +223,25 @@ class Renderer: NSObject, MTKViewDelegate {
             length: MemoryLayout<PointVertex>.stride * verts.count,
             options: []
         ) {
-            vertexBuffer = buffer
-            vertexCount = verts.count
+            songVertexBuffer = buffer
+            songVertexCount = verts.count
         } else {
-            vertexBuffer = nil
-            vertexCount = 0
+            songVertexBuffer = nil
+            songVertexCount = 0
+        }
+
+        refreshActiveBuffersIfNeeded()
+    }
+
+    /// Ensure the active buffer matches the current mode.
+    private func refreshActiveBuffersIfNeeded() {
+        switch currentMode {
+        case .song:
+            activeVertexBuffer = songVertexBuffer
+            activeVertexCount = songVertexCount
+        case .trend:
+            activeVertexBuffer = trendVertexBuffer
+            activeVertexCount = trendVertexCount
         }
     }
 
@@ -215,13 +290,13 @@ class Renderer: NSObject, MTKViewDelegate {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let rpd = view.currentRenderPassDescriptor,
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd),
-              let vertexBuffer = vertexBuffer,
-              vertexCount > 0 else { return }
+              let vertexBuffer = activeVertexBuffer,
+              activeVertexCount > 0 else { return }
 
         encoder.setRenderPipelineState(pipelineState)
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
         encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)
-        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: vertexCount)
+        encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: activeVertexCount)
         encoder.endEncoding()
         if let drawable = view.currentDrawable {
             commandBuffer.present(drawable)

@@ -1,6 +1,7 @@
 data/music/*/*
 data/processed/*/*
-data/processed/*.npz
+data/processed/*
 music_visualizer
 default.metallib
 .DS_Store
+__pycache__/

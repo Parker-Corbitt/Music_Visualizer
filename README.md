@@ -2,7 +2,7 @@
 
 ## Abstract
 
-This project visualizes the relationship between loudness and amplitude in popular music using a dual-mode system that operates at both macro and micro scales. Audio features from representative tracks across multiple decades are processed into 3D scalar fields, which are visualized using two high-level computer graphics methods: isosurface extraction and GPU-based ray-marched volume rendering. In this formulation, each volume is treated as an audio density field, and ray marching integrates that density along viewing rays to reveal where particular loudness behaviors are persistent or dominant. Isosurfaces extracted from these volumes are then color-mapped using additional attributes such as decade or frequency band, effectively encoding a fourth data dimension into hue. The system supports an aggregate trend mode that shows decade-level evolutions in loudness behavior, and an individual song mode that reveals fine-scale loudness structure within each track. This provides a comprehensive visualization framework for analyzing and exploring audio dynamics through advanced rendering techniques.
+This project visualizes the relationship between loudness and amplitude in popular music using a dual-mode system that operates at both macro and micro scales. Audio features from representative tracks across multiple decades are processed into 3D scalar fields, which are visualized using two high-level computer graphics methods: isosurface extraction and GPU-based ray-marched volume rendering. In this formulation, each volume is treated as an audio density field, and ray marching integrates that density along viewing rays to reveal where particular loudness behaviors are persistent or dominant. Isosurfaces extracted from these volumes are then color-mapped using additional attributes such as decade or frequency band, effectively encoding a fourth data dimension into hue. The system supports an aggregate trend mode that shows decade-level evolution in the relationship between physical amplitude and perceived loudness via a 3D histogram volume, and an individual song mode that reveals fine-scale loudness structure within each track. This provides a comprehensive visualization framework for analyzing and exploring audio dynamics through advanced rendering techniques.
 
 ## Motivation
 
@@ -14,14 +14,15 @@ This project treats loudness–amplitude behavior as a scalar field to be visual
 
 ### Trend Mode (Aggregate Volume)
 
-Songs are grouped by decade. For each decade, audio features are computed and aggregated into a 3D scalar field.
+Songs are grouped by decade. For each decade, audio features are computed and aggregated into a 3D scalar field that lives in **amplitude–loudness–decade space**. Concretely, each decade is represented as a 2D histogram over physical amplitude and perceived loudness, and these histograms are stacked along a decade axis to form a single volume:
 
 - **x-axis:** amplitude bin
-- **y-axis:** loudness metric
+- **y-axis:** perceived loudness bin
 - **z-axis:** decade index
-- **Hue:** dynamic range
+- **Scalar value:** loudness density in that bin, derived from normalized frame counts
+- **Hue:** per-decade dynamic range
 
-This produces a smooth volumetric field showing how loudness characteristics shift over long timescales.
+In this formulation, the trend volume acts as a “loudness war” density field: regions of high scalar value indicate amplitude–loudness regimes where the music spends a lot of time in a given decade. Isosurfaces extracted from this volume trace out level sets of loudness density, revealing how the most common loudness behaviors drift and thicken across decades.
 
 ### Song Mode (Individual Volumes)
 
@@ -42,7 +43,7 @@ The system implements *at least* these two extraction algorithms:
 - Marching Cubes
 - Dual Contouring
 
-Both operate on the same scalar field. In Song Mode, this field is perceived loudness evaluated over (time, amplitude, frequency); in Trend Mode, it is a loudness density over (amplitude, loudness, decade). The algorithms generate meshes representing **constant perceived-loudness surfaces** (isosurfaces). An adjustable isovalue selects which loudness level to visualize, and surfaces are shaded with per-vertex normals.
+Both operate on the same scalar field. In Song Mode, this field is perceived loudness evaluated over (time, amplitude, frequency); in Trend Mode, it is a loudness density over (amplitude, loudness, decade). The algorithms generate meshes representing **isosurfaces of this scalar field**—for example, constant perceived-loudness surfaces in Song Mode and constant loudness-density surfaces in Trend Mode. An adjustable isovalue selects which scalar level to visualize, and surfaces are shaded with per-vertex normals.
 
 ### Ray-Marched Volume Rendering
 
@@ -74,7 +75,7 @@ Goal: Build both datasets and get Metal environment ready.
 - Gather songs for the decades to represent
 - Extract audio features:
 - Build Song Mode volume (x = time, y = amplitude, z = frequency
-- Build Trend Mode volume (amplitude × loudness histograms per decade)
+- Build Trend Mode volume (3D amplitude × perceived-loudness × decade histogram)
 - Normalize + smooth both volumes
 - Set up Metal rendering environment (shaders, pipelines, buffers)
 - Load 3D textures into GPU memory

@@ -1,6 +1,7 @@
 import AppKit
 import MetalKit
 import Foundation
+import UniformTypeIdentifiers
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -12,6 +13,17 @@ class PointCloudControlBar: NSView {
     private weak var renderer: Renderer?
     private let statusLabel = NSTextField(labelWithString: "No point cloud loaded")
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
+    private lazy var modeControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(
+            labels: ["Song", "Trend"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(modeChanged(_:))
+        )
+        control.selectedSegment = 0
+        control.translatesAutoresizingMaskIntoConstraints = false
+        return control
+    }()
     private var timer: Timer?
 
     init(renderer: Renderer) {
@@ -28,11 +40,7 @@ class PointCloudControlBar: NSView {
         cameraLabel.alignment = .right
         cameraLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let spacer = NSView()
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let stack = NSStackView(views: [openButton, statusLabel, spacer, cameraLabel])
+        let stack = NSStackView(views: [modeControl, openButton, statusLabel, NSView(), cameraLabel])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -59,7 +67,13 @@ class PointCloudControlBar: NSView {
     }
 
     func updateSelectedFileName(_ name: String?) {
-        statusLabel.stringValue = name ?? "No point cloud loaded"
+        let modeText = (renderer?.currentMode == .trend) ? "Trend" : "Song"
+        statusLabel.stringValue = "\(modeText): \(name ?? "No point cloud loaded")"
+    }
+
+    func setMode(_ mode: RenderMode) {
+        modeControl.selectedSegment = (mode == .song) ? 0 : 1
+        refreshStatusLabel()
     }
 
     private func refreshCameraLabel() {
@@ -76,15 +90,36 @@ class PointCloudControlBar: NSView {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["bin"]
+        if let binType = UTType(filenameExtension: "bin") {
+            panel.allowedContentTypes = [binType]
+        } else {
+            panel.allowedContentTypes = [.data]
+        }
 
         if panel.runModal() == .OK, let url = panel.url {
             if renderer?.loadSongPointCloud(at: url.path) == true {
-                updateSelectedFileName(url.lastPathComponent)
+                if renderer?.currentMode == .song {
+                    updateSelectedFileName(url.lastPathComponent)
+                }
             } else {
                 NSSound.beep()
             }
         }
+    }
+
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        let selectedMode: RenderMode = sender.selectedSegment == 0 ? .song : .trend
+        guard renderer?.setMode(selectedMode) == true else {
+            NSSound.beep()
+            // Revert UI selection if mode change failed
+            sender.selectedSegment = (renderer?.currentMode == .song) ? 0 : 1
+            return
+        }
+        refreshStatusLabel()
+    }
+
+    private func refreshStatusLabel() {
+        updateSelectedFileName(renderer?.activePointCloudName())
     }
 }
 
@@ -145,7 +180,9 @@ NSLayoutConstraint.activate([
     metalView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
 ])
 
-let initialName = renderer.loadInitialPointCloudIfAvailable()
-controlBar.updateSelectedFileName(initialName)
+let initialName = renderer.loadInitialSongPointCloudIfAvailable()
+renderer.setMode(.song)
+controlBar.setMode(.song)
+controlBar.updateSelectedFileName(renderer.activePointCloudName())
 
 app.run()
