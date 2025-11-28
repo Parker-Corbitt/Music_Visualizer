@@ -101,6 +101,8 @@ class Renderer: NSObject, MTKViewDelegate {
     var uniformBuffer: MTLBuffer!
     var camera: Camera
     var inputController: InputController!
+    var isosurfaceExtractionEnabled: Bool = false
+    var isovalue: Float = 0.5
 
     /// Load a song-mode point cloud from disk and replace the current vertex buffer.
     /// This can be called at runtime to switch between different songs.

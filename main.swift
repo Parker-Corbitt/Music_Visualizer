@@ -13,6 +13,24 @@ class PointCloudControlBar: NSView {
     private weak var renderer: Renderer?
     private let statusLabel = NSTextField(labelWithString: "No point cloud loaded")
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
+    private lazy var isosurfaceToggle: NSButton = {
+        let button = NSButton(checkboxWithTitle: "Isosurface", target: self, action: #selector(isosurfaceToggled(_:)))
+        button.state = .off
+        return button
+    }()
+    private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
+    private lazy var isovalueSlider: NSSlider = {
+        let slider = NSSlider(value: 0.5, minValue: 0.0, maxValue: 1.0, target: self, action: #selector(isovalueChanged(_:)))
+        slider.isContinuous = true
+        slider.isEnabled = false
+        slider.allowsTickMarkValuesOnly = false
+        slider.controlSize = .small
+        slider.maxValue = 1.0
+        slider.minValue = 0.0
+        slider.numberOfTickMarks = 0
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        return slider
+    }()
     private lazy var modeControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
             labels: ["Song", "Trend"],
@@ -39,8 +57,26 @@ class PointCloudControlBar: NSView {
         cameraLabel.lineBreakMode = .byTruncatingTail
         cameraLabel.alignment = .right
         cameraLabel.translatesAutoresizingMaskIntoConstraints = false
+        isovalueLabel.alignment = .right
+        isovalueLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = NSStackView(views: [modeControl, openButton, statusLabel, NSView(), cameraLabel])
+        if let renderer = self.renderer {
+            isosurfaceToggle.state = renderer.isosurfaceExtractionEnabled ? .on : .off
+            isovalueSlider.doubleValue = Double(renderer.isovalue)
+            isovalueSlider.isEnabled = renderer.isosurfaceExtractionEnabled
+            updateIsovalueLabel(renderer.isovalue)
+        }
+
+        let stack = NSStackView(views: [
+            modeControl,
+            openButton,
+            isosurfaceToggle,
+            isovalueLabel,
+            isovalueSlider,
+            statusLabel,
+            NSView(),
+            cameraLabel
+        ])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -53,6 +89,8 @@ class PointCloudControlBar: NSView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            isovalueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
+            isovalueSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
         ])
 
@@ -116,6 +154,22 @@ class PointCloudControlBar: NSView {
             return
         }
         refreshStatusLabel()
+    }
+
+    @objc private func isosurfaceToggled(_ sender: NSButton) {
+        let enabled = sender.state == .on
+        renderer?.isosurfaceExtractionEnabled = enabled
+        isovalueSlider.isEnabled = enabled
+    }
+
+    @objc private func isovalueChanged(_ sender: NSSlider) {
+        let value = Float(sender.doubleValue)
+        renderer?.isovalue = value
+        updateIsovalueLabel(value)
+    }
+
+    private func updateIsovalueLabel(_ value: Float) {
+        isovalueLabel.stringValue = String(format: "Isovalue: %.2f", value)
     }
 
     private func refreshStatusLabel() {
