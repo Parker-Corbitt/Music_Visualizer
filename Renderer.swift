@@ -9,16 +9,19 @@ struct Uniforms {
 
 struct PointVertex {
     var position: SIMD4<Float>
-    var color: SIMD4<Float>
+    var scalar: Float       // A-weighted loudness (0..1)
+    var hpRatio: Float      // Harmonic-percussive ratio (0..1)
+    var padding: SIMD2<Float> = .zero  // pad to 32 bytes for alignment
 }
 
 struct SongPointCloudLoader {
     /// Load a song-mode point cloud from a raw float32 binary file.
     ///
     /// The file layout must be:
-    ///     [x, y, z, r, g, b, a] per vertex (all Float32),
+    ///     [x, y, z, scalar, hp_ratio] per vertex (all Float32),
     /// where x,y,z are already normalized into clip-space-ish coordinates,
-    /// and r,g,b,a are color components in [0,1].
+    /// scalar is A-weighted loudness in [0,1],
+    /// and hp_ratio is harmonic–percussive ratio in [0,1].
     ///
     /// Returns:
     ///   - buffer: MTLBuffer containing an array of PointVertex
@@ -31,12 +34,12 @@ struct SongPointCloudLoader {
         }
 
         let floatCount = data.count / MemoryLayout<Float>.size
-        if floatCount % 7 != 0 {
-            print("[SongPointCloudLoader] Unexpected float count \(floatCount); expected a multiple of 7.")
+        if floatCount % 5 != 0 {
+            print("[SongPointCloudLoader] Unexpected float count \(floatCount); expected a multiple of 5.")
             return (nil, 0)
         }
 
-        let vertexCount = floatCount / 7
+        let vertexCount = floatCount / 5
         if vertexCount == 0 {
             print("[SongPointCloudLoader] No vertices found in file: \(path)")
             return (nil, 0)
@@ -48,19 +51,16 @@ struct SongPointCloudLoader {
         data.withUnsafeBytes { rawBuf in
             let buf = rawBuf.bindMemory(to: Float.self)
             var i = 0
-            while i + 6 < floatCount {
+            while i + 4 < floatCount {
                 let x = buf[i + 0]
                 let y = buf[i + 1]
                 let z = buf[i + 2]
-                let r = buf[i + 3]
-                let g = buf[i + 4]
-                let b = buf[i + 5]
-                let a = buf[i + 6]
-                i += 7
+                let scalar = buf[i + 3]
+                let hp = buf[i + 4]
+                i += 5
 
                 let position = SIMD4<Float>(x, y, z, 1.0)
-                let color    = SIMD4<Float>(r, g, b, a)
-                vertices.append(PointVertex(position: position, color: color))
+                vertices.append(PointVertex(position: position, scalar: scalar, hpRatio: hp))
             }
         }
 
@@ -139,15 +139,6 @@ class Renderer: NSObject, MTKViewDelegate {
     /// Build a small procedural cube of colored points as a safe default.
     private func makeProceduralFallbackCloud() {
         var verts: [PointVertex] = []
-        let colors: [SIMD4<Float>] = [
-            SIMD4<Float>(1, 0, 0, 1),
-            SIMD4<Float>(0, 1, 0, 1),
-            SIMD4<Float>(0, 0, 1, 1),
-            SIMD4<Float>(1, 1, 0, 1),
-            SIMD4<Float>(1, 0, 1, 1),
-            SIMD4<Float>(0, 1, 1, 1)
-        ]
-
         let positions: [SIMD3<Float>] = [
             SIMD3<Float>(-0.4, -0.4, -0.4),
             SIMD3<Float>( 0.4, -0.4, -0.4),
@@ -160,8 +151,10 @@ class Renderer: NSObject, MTKViewDelegate {
         ]
 
         for (i, pos) in positions.enumerated() {
-            let color = colors[i % colors.count]
-            verts.append(PointVertex(position: SIMD4<Float>(pos, 1.0), color: color))
+            let scalar: Float = 1.0
+            // Alternate hpRatio to give a small variation in fallback colors
+            let hp: Float = (i % 2 == 0) ? 0.25 : 0.75
+            verts.append(PointVertex(position: SIMD4<Float>(pos, 1.0), scalar: scalar, hpRatio: hp))
         }
 
         if let buffer = device.makeBuffer(

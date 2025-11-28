@@ -202,20 +202,23 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
         - x: normalized time in [-1, 1]
         - y: log amplitude (dB-like) normalized to [-1, 1]
         - z: normalized frequency index in [-1, 1]
-        - r,g,b,a: color derived solely from harmonic–percussive ratio.
+        - scalar: perceived loudness (A-weighted), normalized to [0, 1]
+        - hp_ratio: harmonic–percussive ratio in [0, 1]
 
     The output is a raw float32 binary file with layout:
-        [x, y, z, r, g, b, a] per vertex.
+        [x, y, z, scalar, hp_ratio] per vertex.
 
     Note: Completely silent time frames (no energy across all frequencies) are omitted from the point cloud.
     """
-    required_keys = ("magnitude", "hp_ratio")
+    required_keys = ("magnitude", "hp_ratio", "sample_rate", "n_fft")
     if not all(k in features for k in required_keys):
         print(f"[exportSongPointCloud] Missing required feature keys in song features; expected {required_keys}. Skipping point cloud export.")
         return
 
     magnitude = features["magnitude"]        # [freq_bins, frames]
     hp_ratio = features["hp_ratio"]          # [freq_bins, frames]
+    sample_rate = int(features["sample_rate"])
+    n_fft = int(features["n_fft"])
 
     freq_bins, frames = magnitude.shape
 
@@ -248,6 +251,14 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
     amp_eps = 1e-10
     amp_log = 20.0 * np.log10(amp + amp_eps)  # typically negative values
 
+    # Perceived loudness (A-weighted) per (freq, time)
+    freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+    freqs_safe = np.maximum(freqs, 1.0)
+    A_weight_db = librosa.A_weighting(freqs_safe)
+    A_weight_gain = 10.0 ** (A_weight_db / 20.0)
+    amp_A = amp * A_weight_gain[:, np.newaxis]
+    loudness_A_db = 20.0 * np.log10(amp_A + amp_eps)
+
     # Normalize log amplitude globally over remaining points to [0,1]
     log_min = float(amp_log.min())
     log_max = float(amp_log.max())
@@ -255,6 +266,13 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
         amp_norm = np.zeros_like(amp_log, dtype=np.float32)
     else:
         amp_norm = ((amp_log - log_min) / (log_max - log_min)).astype(np.float32)
+
+    loud_min = float(loudness_A_db.min())
+    loud_max = float(loudness_A_db.max())
+    if loud_max == loud_min:
+        loudness_norm = np.zeros_like(loudness_A_db, dtype=np.float32)
+    else:
+        loudness_norm = ((loudness_A_db - loud_min) / (loud_max - loud_min)).astype(np.float32)
 
     # Map to [-1, 1] for NDC y-axis
     amp_ndc = amp_norm * 2.0 - 1.0
@@ -275,24 +293,15 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
     # Sample harmonic–percussive ratio on the same (freq, time) grid
     hp = hp_ratio[np.ix_(freqs_idx, times_idx)]  # [F, frames_valid]
 
-    # Color based solely on harmonic vs. percussive energy:
-    # hp_ratio near 0 -> blue, near 1 -> red. Keep a small green accent.
-    r = hp
-    b = 1.0 - hp
-    g = np.full_like(hp, 0.2)
-    a = np.ones_like(r, dtype=np.float32)
-
-    # Flatten into [N, 7] float32: x,y,z,r,g,b,a
-    X_flat = X.ravel()
-    Y_flat = Y.ravel()
-    Z_flat = Z.ravel()
-    r_flat = r.ravel()
-    g_flat = g.ravel()
-    b_flat = b.ravel()
-    a_flat = a.ravel()
+    # Flatten into [N, 5] float32: x, y, z, scalar, hp_ratio
+    X_flat = X.ravel().astype(np.float32)
+    Y_flat = Y.ravel().astype(np.float32)
+    Z_flat = Z.ravel().astype(np.float32)
+    loud_flat = loudness_norm.ravel().astype(np.float32)
+    hp_flat = hp.ravel().astype(np.float32)
 
     verts = np.stack(
-        [X_flat, Y_flat, Z_flat, r_flat, g_flat, b_flat, a_flat],
+        [X_flat, Y_flat, Z_flat, loud_flat, hp_flat],
         axis=1,
     ).astype(np.float32)
 
