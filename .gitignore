@@ -1,0 +1,5 @@
+data/music/*/*
+data/processed/*/*
+data/processed/*.npz
+music_visualizer
+default.metallib
