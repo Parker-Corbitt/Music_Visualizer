@@ -69,7 +69,7 @@ class PointCloudControlBar: NSView {
         if let renderer = self.renderer {
             renderStyleControl.selectedSegment = segmentIndex(for: renderer.surfaceMode)
             isovalueSlider.doubleValue = Double(renderer.isovalue)
-            isovalueSlider.isEnabled = renderer.surfaceMode == .isosurface
+            isovalueSlider.isEnabled = renderer.surfaceMode != .pointCloud
             updateIsovalueLabel(renderer.isovalue)
         }
 
@@ -165,7 +165,7 @@ class PointCloudControlBar: NSView {
     @objc private func renderStyleChanged(_ sender: NSSegmentedControl) {
         guard let mode = surfaceMode(forSegment: sender.selectedSegment) else { return }
         renderer?.setSurfaceMode(mode)
-        isovalueSlider.isEnabled = (mode == .isosurface)
+        isovalueSlider.isEnabled = (mode != .pointCloud)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {

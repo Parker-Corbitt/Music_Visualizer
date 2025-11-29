@@ -5,3 +5,5 @@ music_visualizer
 default.metallib
 .DS_Store
 __pycache__/
+.cache/
+.build-cache/
