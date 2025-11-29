@@ -13,10 +13,16 @@ class PointCloudControlBar: NSView {
     private weak var renderer: Renderer?
     private let statusLabel = NSTextField(labelWithString: "No point cloud loaded")
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
-    private lazy var isosurfaceToggle: NSButton = {
-        let button = NSButton(checkboxWithTitle: "Isosurface", target: self, action: #selector(isosurfaceToggled(_:)))
-        button.state = .off
-        return button
+    private lazy var renderStyleControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(
+            labels: ["Points", "Mesh", "Isosurface"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(renderStyleChanged(_:))
+        )
+        control.selectedSegment = 0
+        control.translatesAutoresizingMaskIntoConstraints = false
+        return control
     }()
     private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
     private lazy var isovalueSlider: NSSlider = {
@@ -61,16 +67,16 @@ class PointCloudControlBar: NSView {
         isovalueLabel.translatesAutoresizingMaskIntoConstraints = false
 
         if let renderer = self.renderer {
-            isosurfaceToggle.state = renderer.isosurfaceExtractionEnabled ? .on : .off
+            renderStyleControl.selectedSegment = segmentIndex(for: renderer.surfaceMode)
             isovalueSlider.doubleValue = Double(renderer.isovalue)
-            isovalueSlider.isEnabled = renderer.isosurfaceExtractionEnabled
+            isovalueSlider.isEnabled = renderer.surfaceMode == .isosurface
             updateIsovalueLabel(renderer.isovalue)
         }
 
         let stack = NSStackView(views: [
             modeControl,
             openButton,
-            isosurfaceToggle,
+            renderStyleControl,
             isovalueLabel,
             isovalueSlider,
             statusLabel,
@@ -156,10 +162,10 @@ class PointCloudControlBar: NSView {
         refreshStatusLabel()
     }
 
-    @objc private func isosurfaceToggled(_ sender: NSButton) {
-        let enabled = sender.state == .on
-        renderer?.isosurfaceExtractionEnabled = enabled
-        isovalueSlider.isEnabled = enabled
+    @objc private func renderStyleChanged(_ sender: NSSegmentedControl) {
+        guard let mode = surfaceMode(forSegment: sender.selectedSegment) else { return }
+        renderer?.setSurfaceMode(mode)
+        isovalueSlider.isEnabled = (mode == .isosurface)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {
@@ -170,6 +176,23 @@ class PointCloudControlBar: NSView {
 
     private func updateIsovalueLabel(_ value: Float) {
         isovalueLabel.stringValue = String(format: "Isovalue: %.2f", value)
+    }
+
+    private func segmentIndex(for mode: SurfaceRenderMode) -> Int {
+        switch mode {
+        case .pointCloud: return 0
+        case .mesh: return 1
+        case .isosurface: return 2
+        }
+    }
+
+    private func surfaceMode(forSegment segment: Int) -> SurfaceRenderMode? {
+        switch segment {
+        case 0: return .pointCloud
+        case 1: return .mesh
+        case 2: return .isosurface
+        default: return nil
+        }
     }
 
     private func refreshStatusLabel() {

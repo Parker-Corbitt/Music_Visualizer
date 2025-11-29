@@ -25,6 +25,13 @@ enum RenderMode {
     case trend
 }
 
+
+enum SurfaceRenderMode {
+    case pointCloud
+    case mesh
+    case isosurface
+}
+
 struct SongPointCloudLoader {
     /// Load a song-mode point cloud from a raw float32 binary file.
     ///
@@ -98,10 +105,16 @@ class Renderer: NSObject, MTKViewDelegate {
     private var trendPointCloud: PointCloudResource?
 
     private(set) var currentMode: RenderMode = .song
+    private(set) var surfaceMode: SurfaceRenderMode = .pointCloud
     var uniformBuffer: MTLBuffer!
     var camera: Camera
     var inputController: InputController!
-    var isosurfaceExtractionEnabled: Bool = false
+
+    /// Legacy bridge for existing callers; maps to point cloud when false and isosurface when true.
+    var isosurfaceExtractionEnabled: Bool {
+        get { surfaceMode == .isosurface }
+        set { surfaceMode = newValue ? .isosurface : .pointCloud }
+    }
     var isovalue: Float = 0.5
 
     /// Load a song-mode point cloud from disk and replace the current vertex buffer.
@@ -145,6 +158,12 @@ class Renderer: NSObject, MTKViewDelegate {
         ensurePointCloudLoaded(for: mode)
         refreshActivePointCloud()
         return activePointCloud != nil && activePointCloud!.count > 0
+    }
+
+    /// Switch the visualization output between points, meshes, or isosurfaces.
+    func setSurfaceMode(_ mode: SurfaceRenderMode) {
+        surfaceMode = mode
+        // Placeholder: hook in mesh/isosurface pipeline selection here when available.
     }
 
     private func ensurePointCloudLoaded(for mode: RenderMode) {
@@ -294,6 +313,8 @@ class Renderer: NSObject, MTKViewDelegate {
         encoder.setRenderPipelineState(pipelineState)
         encoder.setVertexBuffer(pointCloud.buffer, offset: 0, index: 0)
         encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)
+
+        // For now, all modes visualize the active data as points until mesh/isosurface pipelines are wired up.
         encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: pointCloud.count)
         encoder.endEncoding()
         if let drawable = view.currentDrawable {
