@@ -29,7 +29,7 @@ struct VoxelGridInfo {
     uint _pad1;
 };
 
-struct MarchingCubesParams {
+struct IsoSurfaceParams {
     float isoValue;
     uint maxVertices;
     uint2 _pad;
@@ -104,6 +104,10 @@ inline float3 interpolateVertex(float3 p0, float3 p1, float v0, float v1, float 
     float denom = (v1 - v0);
     float t = (abs(denom) < 1e-6) ? 0.5 : clamp((iso - v0) / denom, 0.0, 1.0);
     return mix(p0, p1, t);
+}
+
+inline uint flattenCell3D(uint3 coord, uint3 res) {
+    return (coord.z * res.y + coord.y) * res.x + coord.x;
 }
 
 kernel void clearGrid(device atomic_uint *counts [[buffer(0)]],
@@ -184,7 +188,7 @@ constant short tetraTriTable[16][7] = {
 
 kernel void marchingTetrahedra(const device float *scalarGrid [[buffer(0)]],
                                constant VoxelGridInfo &info [[buffer(1)]],
-                               constant MarchingCubesParams &params [[buffer(2)]],
+                               constant IsoSurfaceParams &params [[buffer(2)]],
                                device MeshVertex *meshVerts [[buffer(3)]],
                                device atomic_uint *vertexCounter [[buffer(4)]],
                                uint gid [[thread_position_in_grid]]) {
@@ -273,4 +277,260 @@ kernel void marchingTetrahedra(const device float *scalarGrid [[buffer(0)]],
             meshVerts[baseIndex + 2] = {float4(c, 1.0), normal, colorValue};
         }
     }
+}
+
+// MARK: - Dual Contouring
+
+inline float3 estimateCellNormal(const float values[8]) {
+    float gx = (values[1] + values[3] + values[5] + values[7]) - (values[0] + values[2] + values[4] + values[6]);
+    float gy = (values[2] + values[3] + values[6] + values[7]) - (values[0] + values[1] + values[4] + values[5]);
+    float gz = (values[4] + values[5] + values[6] + values[7]) - (values[0] + values[1] + values[2] + values[3]);
+    float3 n = float3(gx, gy, gz);
+    if (all(isfinite(n)) && length(n) > 1e-6) {
+        return normalize(n);
+    }
+    return float3(0.0, 1.0, 0.0);
+}
+
+constant ushort2 cubeEdges[12] = {
+    ushort2(0, 1), ushort2(1, 3), ushort2(3, 2), ushort2(2, 0),
+    ushort2(4, 5), ushort2(5, 7), ushort2(7, 6), ushort2(6, 4),
+    ushort2(0, 4), ushort2(1, 5), ushort2(3, 7), ushort2(2, 6)
+};
+
+kernel void dualContourCells(const device float *scalarGrid [[buffer(0)]],
+                             constant VoxelGridInfo &info [[buffer(1)]],
+                             constant IsoSurfaceParams &params [[buffer(2)]],
+                             device MeshVertex *cellVertices [[buffer(3)]],
+                             device uint *cellMask [[buffer(4)]],
+                             uint gid [[thread_position_in_grid]]) {
+    uint3 res = info.resolution;
+    if (res.x < 2 || res.y < 2 || res.z < 2) { return; }
+
+    uint cellsX = res.x - 1;
+    uint cellsY = res.y - 1;
+    uint cellsZ = res.z - 1;
+    uint cellCount = cellsX * cellsY * cellsZ;
+    if (gid >= cellCount) { return; }
+
+    uint cx = gid % cellsX;
+    uint rem = gid / cellsX;
+    uint cy = rem % cellsY;
+    uint cz = rem / cellsY;
+
+    uint3 base = uint3(cx, cy, cz);
+    uint cornerIdx[8] = {
+        flatten3D(base + uint3(0, 0, 0), res),
+        flatten3D(base + uint3(1, 0, 0), res),
+        flatten3D(base + uint3(0, 1, 0), res),
+        flatten3D(base + uint3(1, 1, 0), res),
+        flatten3D(base + uint3(0, 0, 1), res),
+        flatten3D(base + uint3(1, 0, 1), res),
+        flatten3D(base + uint3(0, 1, 1), res),
+        flatten3D(base + uint3(1, 1, 1), res)
+    };
+
+    float values[8];
+    float3 positions[8];
+    float minV = 0.0;
+    float maxV = 0.0;
+    for (uint i = 0; i < 8; ++i) {
+        values[i] = scalarGrid[cornerIdx[i]];
+        uint3 offs = uint3((i & 1) ? 1u : 0u, (i & 2) ? 1u : 0u, (i & 4) ? 1u : 0u);
+        positions[i] = info.origin + float3(base + offs) * info.spacing;
+        if (i == 0) {
+            minV = maxV = values[i];
+        } else {
+            minV = min(minV, values[i]);
+            maxV = max(maxV, values[i]);
+        }
+    }
+
+    if (!(minV < params.isoValue && maxV > params.isoValue)) {
+        cellMask[gid] = 0u;
+        return;
+    }
+
+    float3 accum = float3(0.0);
+    uint intersections = 0;
+    for (uint e = 0; e < 12; ++e) {
+        ushort2 edge = cubeEdges[e];
+        float v0 = values[edge.x];
+        float v1 = values[edge.y];
+        float d0 = v0 - params.isoValue;
+        float d1 = v1 - params.isoValue;
+        if (d0 * d1 > 0.0) { continue; }
+        float3 p = interpolateVertex(positions[edge.x], positions[edge.y], v0, v1, params.isoValue);
+        accum += p;
+        intersections += 1u;
+    }
+
+    if (intersections == 0) {
+        cellMask[gid] = 0u;
+        return;
+    }
+
+    cellMask[gid] = 1u;
+    float3 pos = accum / float(intersections);
+    float3 normal = estimateCellNormal(values);
+    float colorValue = clamp((values[0] + values[1] + values[2] + values[3] +
+                              values[4] + values[5] + values[6] + values[7]) / 8.0, 0.0, 1.0);
+
+    cellVertices[gid] = {float4(pos, 1.0), normal, colorValue};
+}
+
+kernel void dualContourEdgesX(const device float *scalarGrid [[buffer(0)]],
+                              constant VoxelGridInfo &info [[buffer(1)]],
+                              constant IsoSurfaceParams &params [[buffer(2)]],
+                              const device MeshVertex *cellVertices [[buffer(3)]],
+                              const device uint *cellMask [[buffer(4)]],
+                              device MeshVertex *meshVerts [[buffer(5)]],
+                              device atomic_uint *vertexCounter [[buffer(6)]],
+                              uint gid [[thread_position_in_grid]]) {
+    uint3 res = info.resolution;
+    if (res.x < 2 || res.y < 2 || res.z < 2) { return; }
+
+    uint strideX = res.x - 1;
+    uint edgesX = strideX * res.y * res.z;
+    if (gid >= edgesX) { return; }
+
+    uint z = gid / (strideX * res.y);
+    uint rem = gid - z * strideX * res.y;
+    uint y = rem / strideX;
+    uint x = rem - y * strideX;
+
+    if (y == 0 || z == 0 || y >= res.y - 1 || z >= res.z - 1) { return; }
+
+    float v0 = scalarGrid[flatten3D(uint3(x, y, z), res)];
+    float v1 = scalarGrid[flatten3D(uint3(x + 1, y, z), res)];
+    float d0 = v0 - params.isoValue;
+    float d1 = v1 - params.isoValue;
+    if (d0 * d1 >= 0.0) { return; }
+
+    uint3 cellRes = uint3(res.x - 1, res.y - 1, res.z - 1);
+    uint c0 = flattenCell3D(uint3(x,     y - 1, z - 1), cellRes);
+    uint c1 = flattenCell3D(uint3(x,     y,     z - 1), cellRes);
+    uint c2 = flattenCell3D(uint3(x,     y - 1, z    ), cellRes);
+    uint c3 = flattenCell3D(uint3(x,     y,     z    ), cellRes);
+
+    if (cellMask[c0] == 0 || cellMask[c1] == 0 || cellMask[c2] == 0 || cellMask[c3] == 0) { return; }
+
+    MeshVertex vtx0 = cellVertices[c0];
+    MeshVertex vtx1 = cellVertices[c1];
+    MeshVertex vtx2 = cellVertices[c2];
+    MeshVertex vtx3 = cellVertices[c3];
+
+    uint base = atomic_fetch_add_explicit(vertexCounter, 6u, memory_order_relaxed);
+    if (base + 5u >= params.maxVertices) { return; }
+
+    meshVerts[base + 0] = vtx0;
+    meshVerts[base + 1] = vtx1;
+    meshVerts[base + 2] = vtx2;
+    meshVerts[base + 3] = vtx2;
+    meshVerts[base + 4] = vtx1;
+    meshVerts[base + 5] = vtx3;
+}
+
+kernel void dualContourEdgesY(const device float *scalarGrid [[buffer(0)]],
+                              constant VoxelGridInfo &info [[buffer(1)]],
+                              constant IsoSurfaceParams &params [[buffer(2)]],
+                              const device MeshVertex *cellVertices [[buffer(3)]],
+                              const device uint *cellMask [[buffer(4)]],
+                              device MeshVertex *meshVerts [[buffer(5)]],
+                              device atomic_uint *vertexCounter [[buffer(6)]],
+                              uint gid [[thread_position_in_grid]]) {
+    uint3 res = info.resolution;
+    if (res.x < 2 || res.y < 2 || res.z < 2) { return; }
+
+    uint strideY = res.y - 1;
+    uint edgesY = res.x * strideY * res.z;
+    if (gid >= edgesY) { return; }
+
+    uint z = gid / (res.x * strideY);
+    uint rem = gid - z * res.x * strideY;
+    uint x = rem / strideY;
+    uint y = rem - x * strideY;
+
+    if (x == 0 || z == 0 || x >= res.x - 1 || z >= res.z - 1) { return; }
+
+    float v0 = scalarGrid[flatten3D(uint3(x, y, z), res)];
+    float v1 = scalarGrid[flatten3D(uint3(x, y + 1, z), res)];
+    float d0 = v0 - params.isoValue;
+    float d1 = v1 - params.isoValue;
+    if (d0 * d1 >= 0.0) { return; }
+
+    uint3 cellRes = uint3(res.x - 1, res.y - 1, res.z - 1);
+    uint c0 = flattenCell3D(uint3(x - 1, y,     z - 1), cellRes);
+    uint c1 = flattenCell3D(uint3(x,     y,     z - 1), cellRes);
+    uint c2 = flattenCell3D(uint3(x - 1, y,     z    ), cellRes);
+    uint c3 = flattenCell3D(uint3(x,     y,     z    ), cellRes);
+
+    if (cellMask[c0] == 0 || cellMask[c1] == 0 || cellMask[c2] == 0 || cellMask[c3] == 0) { return; }
+
+    MeshVertex vtx0 = cellVertices[c0];
+    MeshVertex vtx1 = cellVertices[c1];
+    MeshVertex vtx2 = cellVertices[c2];
+    MeshVertex vtx3 = cellVertices[c3];
+
+    uint base = atomic_fetch_add_explicit(vertexCounter, 6u, memory_order_relaxed);
+    if (base + 5u >= params.maxVertices) { return; }
+
+    meshVerts[base + 0] = vtx0;
+    meshVerts[base + 1] = vtx1;
+    meshVerts[base + 2] = vtx2;
+    meshVerts[base + 3] = vtx2;
+    meshVerts[base + 4] = vtx1;
+    meshVerts[base + 5] = vtx3;
+}
+
+kernel void dualContourEdgesZ(const device float *scalarGrid [[buffer(0)]],
+                              constant VoxelGridInfo &info [[buffer(1)]],
+                              constant IsoSurfaceParams &params [[buffer(2)]],
+                              const device MeshVertex *cellVertices [[buffer(3)]],
+                              const device uint *cellMask [[buffer(4)]],
+                              device MeshVertex *meshVerts [[buffer(5)]],
+                              device atomic_uint *vertexCounter [[buffer(6)]],
+                              uint gid [[thread_position_in_grid]]) {
+    uint3 res = info.resolution;
+    if (res.x < 2 || res.y < 2 || res.z < 2) { return; }
+
+    uint strideZ = res.z - 1;
+    uint edgesZ = res.x * res.y * strideZ;
+    if (gid >= edgesZ) { return; }
+
+    uint z = gid / (res.x * res.y);
+    uint rem = gid - z * res.x * res.y;
+    uint y = rem / res.x;
+    uint x = rem - y * res.x;
+
+    if (x == 0 || y == 0 || x >= res.x - 1 || y >= res.y - 1) { return; }
+
+    float v0 = scalarGrid[flatten3D(uint3(x, y, z), res)];
+    float v1 = scalarGrid[flatten3D(uint3(x, y, z + 1), res)];
+    float d0 = v0 - params.isoValue;
+    float d1 = v1 - params.isoValue;
+    if (d0 * d1 >= 0.0) { return; }
+
+    uint3 cellRes = uint3(res.x - 1, res.y - 1, res.z - 1);
+    uint c0 = flattenCell3D(uint3(x - 1, y - 1, z), cellRes);
+    uint c1 = flattenCell3D(uint3(x,     y - 1, z), cellRes);
+    uint c2 = flattenCell3D(uint3(x - 1, y,     z), cellRes);
+    uint c3 = flattenCell3D(uint3(x,     y,     z), cellRes);
+
+    if (cellMask[c0] == 0 || cellMask[c1] == 0 || cellMask[c2] == 0 || cellMask[c3] == 0) { return; }
+
+    MeshVertex vtx0 = cellVertices[c0];
+    MeshVertex vtx1 = cellVertices[c1];
+    MeshVertex vtx2 = cellVertices[c2];
+    MeshVertex vtx3 = cellVertices[c3];
+
+    uint base = atomic_fetch_add_explicit(vertexCounter, 6u, memory_order_relaxed);
+    if (base + 5u >= params.maxVertices) { return; }
+
+    meshVerts[base + 0] = vtx0;
+    meshVerts[base + 1] = vtx1;
+    meshVerts[base + 2] = vtx2;
+    meshVerts[base + 3] = vtx2;
+    meshVerts[base + 4] = vtx1;
+    meshVerts[base + 5] = vtx3;
 }

@@ -15,13 +15,25 @@ class PointCloudControlBar: NSView {
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
     private lazy var renderStyleControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
-            labels: ["Points", "Mesh", "Isosurface"],
+            labels: ["Points", "Mesh"],
             trackingMode: .selectOne,
             target: self,
             action: #selector(renderStyleChanged(_:))
         )
         control.selectedSegment = 0
         control.translatesAutoresizingMaskIntoConstraints = false
+        return control
+    }()
+    private lazy var meshAlgorithmControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(
+            labels: ["Tetra", "Dual"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(meshAlgorithmChanged(_:))
+        )
+        control.selectedSegment = 0
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.isEnabled = false
         return control
     }()
     private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
@@ -70,6 +82,8 @@ class PointCloudControlBar: NSView {
             renderStyleControl.selectedSegment = segmentIndex(for: renderer.surfaceMode)
             isovalueSlider.doubleValue = Double(renderer.isovalue)
             isovalueSlider.isEnabled = renderer.surfaceMode != .pointCloud
+            meshAlgorithmControl.selectedSegment = renderer.meshAlgorithm == .marchingTetrahedra ? 0 : 1
+            meshAlgorithmControl.isEnabled = renderer.surfaceMode == .mesh
             updateIsovalueLabel(renderer.isovalue)
         }
 
@@ -77,6 +91,7 @@ class PointCloudControlBar: NSView {
             modeControl,
             openButton,
             renderStyleControl,
+            meshAlgorithmControl,
             isovalueLabel,
             isovalueSlider,
             statusLabel,
@@ -97,6 +112,7 @@ class PointCloudControlBar: NSView {
             statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             isovalueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
             isovalueSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            meshAlgorithmControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
         ])
 
@@ -166,6 +182,12 @@ class PointCloudControlBar: NSView {
         guard let mode = surfaceMode(forSegment: sender.selectedSegment) else { return }
         renderer?.setSurfaceMode(mode)
         isovalueSlider.isEnabled = (mode != .pointCloud)
+        meshAlgorithmControl.isEnabled = (mode != .pointCloud)
+    }
+
+    @objc private func meshAlgorithmChanged(_ sender: NSSegmentedControl) {
+        let algorithm: MeshAlgorithm = (sender.selectedSegment == 0) ? .marchingTetrahedra : .dualContouring
+        renderer?.setMeshAlgorithm(algorithm)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {
@@ -181,8 +203,7 @@ class PointCloudControlBar: NSView {
     private func segmentIndex(for mode: SurfaceRenderMode) -> Int {
         switch mode {
         case .pointCloud: return 0
-        case .mesh: return 1
-        case .isosurface: return 2
+        case .mesh, .isosurface: return 1
         }
     }
 
@@ -190,7 +211,6 @@ class PointCloudControlBar: NSView {
         switch segment {
         case 0: return .pointCloud
         case 1: return .mesh
-        case 2: return .isosurface
         default: return nil
         }
     }
