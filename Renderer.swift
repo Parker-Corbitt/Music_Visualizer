@@ -159,6 +159,36 @@ class Renderer: NSObject, MTKViewDelegate {
     private let maxMeshVertices: Int = 600_000
     private(set) var meshAlgorithm: MeshAlgorithm = .marchingTetrahedra
 
+    private var voxelCellCount: Int {
+        Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
+    }
+
+    private var voxelCubeCount: Int {
+        Int((voxelResolution.x - 1) * (voxelResolution.y - 1) * (voxelResolution.z - 1))
+    }
+
+    private var edgeXCount: Int {
+        Int((voxelResolution.x - 1) * voxelResolution.y * voxelResolution.z)
+    }
+
+    private var edgeYCount: Int {
+        Int(voxelResolution.x * (voxelResolution.y - 1) * voxelResolution.z)
+    }
+
+    private var edgeZCount: Int {
+        Int(voxelResolution.x * voxelResolution.y * (voxelResolution.z - 1))
+    }
+
+    private struct MeshBuffers {
+        let counts: MTLBuffer
+        let maxCount: MTLBuffer
+        let scalarGrid: MTLBuffer
+        let mesh: MTLBuffer
+        let meshCount: MTLBuffer
+        let dualCells: MTLBuffer?
+        let dualMask: MTLBuffer?
+    }
+
     var isovalue: Float = 0.5 {
         didSet {
             if surfaceMode == .mesh {
@@ -328,10 +358,9 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func ensureVoxelResources(pointCount: Int) {
-        let cellCount = Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
-        let cubeCount = Int(max((voxelResolution.x - 1) * (voxelResolution.y - 1) * (voxelResolution.z - 1), 1))
-        let scalarBytes = cellCount * MemoryLayout<Float>.stride
-        let countBytes = cellCount * MemoryLayout<UInt32>.stride
+        let cubeCount = max(voxelCubeCount, 1)
+        let scalarBytes = voxelCellCount * MemoryLayout<Float>.stride
+        let countBytes = voxelCellCount * MemoryLayout<UInt32>.stride
         let meshBytes = maxMeshVertices * MemoryLayout<MeshVertex>.stride
         let dualBytes = cubeCount * MemoryLayout<MeshVertex>.stride
         let dualMaskBytes = cubeCount * MemoryLayout<UInt32>.stride
@@ -359,6 +388,176 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    private func meshBuffers() -> MeshBuffers? {
+        guard let counts = gridCountsBuffer,
+              let maxCount = gridMaxCountBuffer,
+              let scalarGrid = scalarGridBuffer,
+              let mesh = meshVertexBuffer,
+              let meshCount = meshVertexCountBuffer else {
+            return nil
+        }
+
+        return MeshBuffers(
+            counts: counts,
+            maxCount: maxCount,
+            scalarGrid: scalarGrid,
+            mesh: mesh,
+            meshCount: meshCount,
+            dualCells: dualCellVertexBuffer,
+            dualMask: dualCellMaskBuffer
+        )
+    }
+
+    private func dispatchCompute(_ pipeline: MTLComputePipelineState,
+                                 commandBuffer: MTLCommandBuffer,
+                                 threads: Int,
+                                 configure: (MTLComputeCommandEncoder) -> Void) {
+        guard threads > 0 else { return }
+        let tg = MTLSize(width: max(1, pipeline.threadExecutionWidth), height: 1, depth: 1)
+        let grid = MTLSize(width: threads, height: 1, depth: 1)
+        if let encoder = commandBuffer.makeComputeCommandEncoder() {
+            encoder.setComputePipelineState(pipeline)
+            configure(encoder)
+            encoder.dispatchThreads(grid, threadsPerThreadgroup: tg)
+            encoder.endEncoding()
+        }
+    }
+
+    private func makeGridInfo(pointCount: Int) -> VoxelGridInfo {
+        let spacing = 2.0 / Float(max(voxelResolution.x - 1, 1))
+        return VoxelGridInfo(
+            resolution: voxelResolution,
+            origin: gridOrigin,
+            spacing: spacing,
+            pointCount: UInt32(min(pointCount, Int(UInt32.max)))
+        )
+    }
+
+    private func makeIsoParams() -> IsoSurfaceParams {
+        IsoSurfaceParams(
+            isoValue: isovalue,
+            maxVertices: UInt32(maxMeshVertices)
+        )
+    }
+
+    private func resetMeshCounters(buffers: MeshBuffers, commandBuffer: MTLCommandBuffer) {
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.fill(buffer: buffers.meshCount, range: 0..<MemoryLayout<UInt32>.stride, value: 0)
+            if let mask = buffers.dualMask {
+                blit.fill(buffer: mask, range: 0..<mask.length, value: 0)
+            }
+            blit.endEncoding()
+        }
+    }
+
+    private func prepareScalarGrid(pointCloud: PointCloudResource,
+                                   gridInfo: inout VoxelGridInfo,
+                                   buffers: MeshBuffers,
+                                   commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let clearPipeline = gridClearPipeline,
+              let splatPipeline = voxelSplatPipeline,
+              let normalizePipeline = gridNormalizePipeline else {
+            print("[Renderer] Compute pipelines missing; cannot build mesh.")
+            return false
+        }
+
+        dispatchCompute(clearPipeline, commandBuffer: commandBuffer, threads: voxelCellCount) { encoder in
+            encoder.setBuffer(buffers.counts, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBuffer(buffers.maxCount, offset: 0, index: 2)
+        }
+
+        dispatchCompute(splatPipeline, commandBuffer: commandBuffer, threads: pointCloud.count) { encoder in
+            encoder.setBuffer(pointCloud.buffer, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBuffer(buffers.counts, offset: 0, index: 2)
+            encoder.setBuffer(buffers.maxCount, offset: 0, index: 3)
+        }
+
+        dispatchCompute(normalizePipeline, commandBuffer: commandBuffer, threads: voxelCellCount) { encoder in
+            encoder.setBuffer(buffers.counts, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 2)
+            encoder.setBuffer(buffers.maxCount, offset: 0, index: 3)
+        }
+
+        return true
+    }
+
+    private func runMarchingTetrahedra(gridInfo: inout VoxelGridInfo,
+                                       isoParams: inout IsoSurfaceParams,
+                                       buffers: MeshBuffers,
+                                       commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let marchingPipeline = marchingTetraPipeline else {
+            print("[Renderer] Marching tetrahedra pipeline missing.")
+            return false
+        }
+        dispatchCompute(marchingPipeline, commandBuffer: commandBuffer, threads: max(voxelCubeCount, 1)) { encoder in
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
+            encoder.setBuffer(buffers.mesh, offset: 0, index: 3)
+            encoder.setBuffer(buffers.meshCount, offset: 0, index: 4)
+        }
+        return true
+    }
+
+    private func runDualContouring(gridInfo: inout VoxelGridInfo,
+                                  isoParams: inout IsoSurfaceParams,
+                                  buffers: MeshBuffers,
+                                  commandBuffer: MTLCommandBuffer) -> Bool {
+        guard let cellPipeline = dualCellPipeline,
+              let edgeXPipe = dualEdgeXPipeline,
+              let edgeYPipe = dualEdgeYPipeline,
+              let edgeZPipe = dualEdgeZPipeline,
+              let cellVerts = buffers.dualCells,
+              let cellMask = buffers.dualMask else {
+            print("[Renderer] Dual contouring pipelines missing; cannot build mesh.")
+            return false
+        }
+
+        dispatchCompute(cellPipeline, commandBuffer: commandBuffer, threads: max(voxelCubeCount, 1)) { encoder in
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
+            encoder.setBuffer(cellVerts, offset: 0, index: 3)
+            encoder.setBuffer(cellMask, offset: 0, index: 4)
+        }
+
+        dispatchCompute(edgeXPipe, commandBuffer: commandBuffer, threads: max(edgeXCount, 1)) { encoder in
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
+            encoder.setBuffer(cellVerts, offset: 0, index: 3)
+            encoder.setBuffer(cellMask, offset: 0, index: 4)
+            encoder.setBuffer(buffers.mesh, offset: 0, index: 5)
+            encoder.setBuffer(buffers.meshCount, offset: 0, index: 6)
+        }
+
+        dispatchCompute(edgeYPipe, commandBuffer: commandBuffer, threads: max(edgeYCount, 1)) { encoder in
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
+            encoder.setBuffer(cellVerts, offset: 0, index: 3)
+            encoder.setBuffer(cellMask, offset: 0, index: 4)
+            encoder.setBuffer(buffers.mesh, offset: 0, index: 5)
+            encoder.setBuffer(buffers.meshCount, offset: 0, index: 6)
+        }
+
+        dispatchCompute(edgeZPipe, commandBuffer: commandBuffer, threads: max(edgeZCount, 1)) { encoder in
+            encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
+            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
+            encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
+            encoder.setBuffer(cellVerts, offset: 0, index: 3)
+            encoder.setBuffer(cellMask, offset: 0, index: 4)
+            encoder.setBuffer(buffers.mesh, offset: 0, index: 5)
+            encoder.setBuffer(buffers.meshCount, offset: 0, index: 6)
+        }
+
+        return true
+    }
+
+
     private func rebuildMeshIfNeeded() {
         guard meshNeedsRebuild, surfaceMode == .mesh else { return }
         guard let pointCloud = activePointCloud, pointCloud.count > 0 else { return }
@@ -366,186 +565,55 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func buildMesh(from pointCloud: PointCloudResource) {
-        guard let clearPipeline = gridClearPipeline,
-              let splatPipeline = voxelSplatPipeline,
-              let normalizePipeline = gridNormalizePipeline else {
-            print("[Renderer] Compute pipelines missing; cannot build mesh.")
-            meshNeedsRebuild = false
-            return
-        }
-
-        if pointCloud.count == 0 {
+        guard pointCloud.count > 0 else {
             meshVertexCount = 0
             meshNeedsRebuild = false
             return
         }
 
         ensureVoxelResources(pointCount: pointCloud.count)
-
-        let spacing = 2.0 / Float(max(voxelResolution.x - 1, 1))
-        var gridInfo = VoxelGridInfo(
-            resolution: voxelResolution,
-            origin: gridOrigin,
-            spacing: spacing,
-            pointCount: UInt32(min(pointCloud.count, Int(UInt32.max)))
-        )
-        var isoParams = IsoSurfaceParams(
-            isoValue: isovalue,
-            maxVertices: UInt32(maxMeshVertices)
-        )
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let counts = gridCountsBuffer,
-              let maxCount = gridMaxCountBuffer,
-              let scalarGrid = scalarGridBuffer,
-              let meshBuf = meshVertexBuffer,
-              let meshCount = meshVertexCountBuffer else {
+        guard let buffers = meshBuffers(),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            meshNeedsRebuild = false
             return
         }
 
-        let cellCount = Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
-        let clearThreads = MTLSize(width: cellCount, height: 1, depth: 1)
-        let clearTG = MTLSize(width: max(1, clearPipeline.threadExecutionWidth), height: 1, depth: 1)
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            encoder.setComputePipelineState(clearPipeline)
-            encoder.setBuffer(counts, offset: 0, index: 0)
-            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-            encoder.setBuffer(maxCount, offset: 0, index: 2)
-            encoder.dispatchThreads(clearThreads, threadsPerThreadgroup: clearTG)
-            encoder.endEncoding()
+        var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+        var isoParams = makeIsoParams()
+
+        guard prepareScalarGrid(pointCloud: pointCloud,
+                                gridInfo: &gridInfo,
+                                buffers: buffers,
+                                commandBuffer: commandBuffer) else {
+            meshNeedsRebuild = false
+            return
         }
 
-        let splatThreads = MTLSize(width: pointCloud.count, height: 1, depth: 1)
-        let splatTG = MTLSize(width: max(1, splatPipeline.threadExecutionWidth), height: 1, depth: 1)
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            encoder.setComputePipelineState(splatPipeline)
-            encoder.setBuffer(pointCloud.buffer, offset: 0, index: 0)
-            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-            encoder.setBuffer(counts, offset: 0, index: 2)
-            encoder.setBuffer(maxCount, offset: 0, index: 3)
-            encoder.dispatchThreads(splatThreads, threadsPerThreadgroup: splatTG)
-            encoder.endEncoding()
-        }
+        resetMeshCounters(buffers: buffers, commandBuffer: commandBuffer)
 
-        let normalizeThreads = clearThreads
-        let normTG = MTLSize(width: max(1, normalizePipeline.threadExecutionWidth), height: 1, depth: 1)
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            encoder.setComputePipelineState(normalizePipeline)
-            encoder.setBuffer(counts, offset: 0, index: 0)
-            encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-            encoder.setBuffer(scalarGrid, offset: 0, index: 2)
-            encoder.setBuffer(maxCount, offset: 0, index: 3)
-            encoder.dispatchThreads(normalizeThreads, threadsPerThreadgroup: normTG)
-            encoder.endEncoding()
-        }
-
-        if let blit = commandBuffer.makeBlitCommandEncoder() {
-            blit.fill(buffer: meshCount, range: 0..<MemoryLayout<UInt32>.stride, value: 0)
-            blit.endEncoding()
-        }
-
-        let cubeCount = Int((voxelResolution.x - 1) * (voxelResolution.y - 1) * (voxelResolution.z - 1))
-        let mcThreads = MTLSize(width: max(cubeCount, 1), height: 1, depth: 1)
+        let algorithmRan: Bool
         switch meshAlgorithm {
         case .marchingTetrahedra:
-            guard let marchingPipeline = marchingTetraPipeline else {
-                print("[Renderer] Marching tetrahedra pipeline missing.")
-                break
-            }
-            let mcTG = MTLSize(width: max(1, marchingPipeline.threadExecutionWidth), height: 1, depth: 1)
-            if let encoder = commandBuffer.makeComputeCommandEncoder() {
-                encoder.setComputePipelineState(marchingPipeline)
-                encoder.setBuffer(scalarGrid, offset: 0, index: 0)
-                encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-                encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
-                encoder.setBuffer(meshBuf, offset: 0, index: 3)
-                encoder.setBuffer(meshCount, offset: 0, index: 4)
-                encoder.dispatchThreads(mcThreads, threadsPerThreadgroup: mcTG)
-                encoder.endEncoding()
-            }
+            algorithmRan = runMarchingTetrahedra(gridInfo: &gridInfo,
+                                                 isoParams: &isoParams,
+                                                 buffers: buffers,
+                                                 commandBuffer: commandBuffer)
         case .dualContouring:
-            guard let cellPipeline = dualCellPipeline,
-                  let edgeXPipe = dualEdgeXPipeline,
-                  let edgeYPipe = dualEdgeYPipeline,
-                  let edgeZPipe = dualEdgeZPipeline,
-                  let cellVerts = dualCellVertexBuffer,
-                  let cellMask = dualCellMaskBuffer else {
-                print("[Renderer] Dual contouring pipelines missing; cannot build mesh.")
-                break
-            }
-
-            if let mask = dualCellMaskBuffer {
-                // Ensure the mask is clean before writing active flags.
-                if let blit = commandBuffer.makeBlitCommandEncoder() {
-                    blit.fill(buffer: mask, range: 0..<mask.length, value: 0)
-                    blit.endEncoding()
-                }
-            }
-
-            let cellTG = MTLSize(width: max(1, cellPipeline.threadExecutionWidth), height: 1, depth: 1)
-            if let encoder = commandBuffer.makeComputeCommandEncoder() {
-                encoder.setComputePipelineState(cellPipeline)
-                encoder.setBuffer(scalarGrid, offset: 0, index: 0)
-                encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-                encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
-                encoder.setBuffer(cellVerts, offset: 0, index: 3)
-                encoder.setBuffer(cellMask, offset: 0, index: 4)
-                encoder.dispatchThreads(mcThreads, threadsPerThreadgroup: cellTG)
-                encoder.endEncoding()
-            }
-
-            let edgeXCount = Int(max((voxelResolution.x - 1) * voxelResolution.y * voxelResolution.z, 1))
-            let edgeXTG = MTLSize(width: max(1, edgeXPipe.threadExecutionWidth), height: 1, depth: 1)
-            let edgeYCount = Int(max(voxelResolution.x * (voxelResolution.y - 1) * voxelResolution.z, 1))
-            let edgeYTG = MTLSize(width: max(1, edgeYPipe.threadExecutionWidth), height: 1, depth: 1)
-            let edgeZCount = Int(max(voxelResolution.x * voxelResolution.y * (voxelResolution.z - 1), 1))
-            let edgeZTG = MTLSize(width: max(1, edgeZPipe.threadExecutionWidth), height: 1, depth: 1)
-
-            if let encoder = commandBuffer.makeComputeCommandEncoder() {
-                encoder.setComputePipelineState(edgeXPipe)
-                encoder.setBuffer(scalarGrid, offset: 0, index: 0)
-                encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-                encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
-                encoder.setBuffer(cellVerts, offset: 0, index: 3)
-                encoder.setBuffer(cellMask, offset: 0, index: 4)
-                encoder.setBuffer(meshBuf, offset: 0, index: 5)
-                encoder.setBuffer(meshCount, offset: 0, index: 6)
-                encoder.dispatchThreads(MTLSize(width: edgeXCount, height: 1, depth: 1), threadsPerThreadgroup: edgeXTG)
-                encoder.endEncoding()
-            }
-
-            if let encoder = commandBuffer.makeComputeCommandEncoder() {
-                encoder.setComputePipelineState(edgeYPipe)
-                encoder.setBuffer(scalarGrid, offset: 0, index: 0)
-                encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-                encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
-                encoder.setBuffer(cellVerts, offset: 0, index: 3)
-                encoder.setBuffer(cellMask, offset: 0, index: 4)
-                encoder.setBuffer(meshBuf, offset: 0, index: 5)
-                encoder.setBuffer(meshCount, offset: 0, index: 6)
-                encoder.dispatchThreads(MTLSize(width: edgeYCount, height: 1, depth: 1), threadsPerThreadgroup: edgeYTG)
-                encoder.endEncoding()
-            }
-
-            if let encoder = commandBuffer.makeComputeCommandEncoder() {
-                encoder.setComputePipelineState(edgeZPipe)
-                encoder.setBuffer(scalarGrid, offset: 0, index: 0)
-                encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-                encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
-                encoder.setBuffer(cellVerts, offset: 0, index: 3)
-                encoder.setBuffer(cellMask, offset: 0, index: 4)
-                encoder.setBuffer(meshBuf, offset: 0, index: 5)
-                encoder.setBuffer(meshCount, offset: 0, index: 6)
-                encoder.dispatchThreads(MTLSize(width: edgeZCount, height: 1, depth: 1), threadsPerThreadgroup: edgeZTG)
-                encoder.endEncoding()
-            }
+            algorithmRan = runDualContouring(gridInfo: &gridInfo,
+                                             isoParams: &isoParams,
+                                             buffers: buffers,
+                                             commandBuffer: commandBuffer)
         }
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
-        let countPtr = meshCount.contents().assumingMemoryBound(to: UInt32.self)
-        meshVertexCount = Int(min(countPtr.pointee, UInt32(maxMeshVertices)))
+        if algorithmRan {
+            let countPtr = buffers.meshCount.contents().assumingMemoryBound(to: UInt32.self)
+            meshVertexCount = Int(min(countPtr.pointee, UInt32(maxMeshVertices)))
+        } else {
+            meshVertexCount = 0
+        }
         meshNeedsRebuild = false
     }
 
