@@ -48,6 +48,7 @@ struct IsoSurfaceParams {
 enum RenderMode {
     case song
     case trend
+    case timeline
 }
 
 enum SurfaceRenderMode {
@@ -142,6 +143,7 @@ class Renderer: NSObject, MTKViewDelegate {
     private var activePointCloud: PointCloudResource?
     private var songPointCloud: PointCloudResource?
     private var trendPointCloud: PointCloudResource?
+    private var timelinePointCloud: PointCloudResource?
 
     // Rendering modes
     private(set) var currentMode: RenderMode = .song
@@ -243,7 +245,23 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// Switch between song and trend rendering modes. Ensures buffers are loaded.
+    /// Load the chronological timeline point cloud built from all songs.
+    @discardableResult
+    func loadTimelinePointCloud(at path: String = "data/processed/timeline_points.bin") -> Bool {
+        let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
+        if let buffer = result.buffer, result.count > 0 {
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            self.timelinePointCloud = PointCloudResource(buffer: buffer, count: result.count, name: name)
+            refreshActivePointCloud()
+            print("[Renderer] Loaded timeline point cloud from: \(path) (vertices: \(result.count))")
+            return true
+        } else {
+            print("[Renderer] Failed to load timeline point cloud from: \(path)")
+            return false
+        }
+    }
+
+    /// Switch rendering modes (song / trend / timeline) and ensure buffers are loaded.
     /// Returns true if a buffer is ready for the chosen mode.
     @discardableResult
     func setMode(_ mode: RenderMode) -> Bool {
@@ -280,6 +298,10 @@ class Renderer: NSObject, MTKViewDelegate {
             if trendPointCloud == nil {
                 _ = loadTrendPointCloud()
             }
+        case .timeline:
+            if timelinePointCloud == nil {
+                _ = loadTimelinePointCloud()
+            }
         }
     }
 
@@ -290,6 +312,8 @@ class Renderer: NSObject, MTKViewDelegate {
             return songPointCloud?.name
         case .trend:
             return trendPointCloud?.name
+        case .timeline:
+            return timelinePointCloud?.name
         }
     }
 
@@ -363,7 +387,14 @@ class Renderer: NSObject, MTKViewDelegate {
 
     /// Ensure the active buffer matches the current mode.
     private func refreshActivePointCloud() {
-        activePointCloud = (currentMode == .song) ? songPointCloud : trendPointCloud
+        switch currentMode {
+        case .song:
+            activePointCloud = songPointCloud
+        case .trend:
+            activePointCloud = trendPointCloud
+        case .timeline:
+            activePointCloud = timelinePointCloud
+        }
         invalidateDerivedSurfaces()
     }
 

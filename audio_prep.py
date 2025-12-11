@@ -534,10 +534,12 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
 def buildTimelinePointCloud(
     processedRoot: str | Path = "data/processed",
     outPath: str | Path | None = None,
-    maxFramesPerSong: int = 400,
-    songTimeScale: float = 1.0,
-    baseGap: float = 0.25,
-    yearGapScale: float = 0.05,
+    maxFramesPerSong: int = 1000,
+    songTimeScale: float = 0.8,
+    baseGap: float = 0.02,
+    yearGapScale: float = 0.005,
+    separatorCount: int = 24,
+    separatorScalar: float = 0.2,
 ) -> None:
     """Construct a single point cloud that stitches all songs chronologically.
 
@@ -569,9 +571,13 @@ def buildTimelinePointCloud(
         Multiplier applied to normalized song time. Reduce to shrink the total
         X-span; increase to stretch.
     baseGap : float
-        Fixed gap between consecutive songs along X.
+        Fixed gap between consecutive songs along X (kept small for a continuous ribbon).
     yearGapScale : float
         Additional gap per year difference between consecutive songs.
+    separatorCount : int
+        Number of points to emit for a vertical separator between songs.
+    separatorScalar : float
+        Scalar (alpha driver) for separator points; keep small so they read subtly.
     """
     root = Path(processedRoot)
     if outPath is None:
@@ -679,7 +685,7 @@ def buildTimelinePointCloud(
     prev_year = None
     prev_span = 0.0
 
-    for song in songs_sorted:
+    for idx, song in enumerate(songs_sorted):
         year = song["year"]
         if prev_year is not None:
             year_gap = max(year - prev_year, 0)
@@ -727,6 +733,25 @@ def buildTimelinePointCloud(
                 axis=1,
             )
         )
+
+        # Emit a slim vertical separator between this song and the next.
+        if idx < len(songs_sorted) - 1 and separatorCount > 0:
+            next_year = songs_sorted[idx + 1]["year"]
+            sep_gap = baseGap + max(next_year - year, 0) * yearGapScale
+            sep_x = (offset_x + span) + sep_gap * 0.5
+            y_sep = np.linspace(-1.0, 1.0, separatorCount, dtype=np.float32)
+            verts.append(
+                np.stack(
+                    [
+                        np.full_like(y_sep, np.float32(sep_x)),
+                        y_sep,
+                        np.full_like(y_sep, np.float32(dyn_ndc)),
+                        np.full_like(y_sep, np.float32(separatorScalar)),
+                        np.full_like(y_sep, np.float32(year01)),
+                    ],
+                    axis=1,
+                )
+            )
 
     if not verts:
         print("[buildTimelinePointCloud] No vertices generated.")
@@ -838,13 +863,42 @@ def extractSongFeatures() -> None:
     buildTimelinePointCloud(processedRoot=processed_root)
 
 
+def rebuildTimeline(processedRoot: str | Path = "data/processed",
+                    outPath: str | Path | None = None) -> None:
+    """Convenience wrapper to rebuild only the stitched timeline cloud."""
+    buildTimelinePointCloud(processedRoot=processedRoot, outPath=outPath)
+
+
 def main() -> None:
     """Entry point for the audio preprocessing pipeline.
 
     This simply invokes :func:`extractSongFeatures`. Keeping it as a
     separate function makes it easier to call from other scripts or tests.
     """
-    extractSongFeatures()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Audio preprocessing pipeline.")
+    parser.add_argument(
+        "--timeline-only",
+        action="store_true",
+        help="Only rebuild the stitched timeline point cloud.",
+    )
+    parser.add_argument(
+        "--processed-root",
+        default="data/processed",
+        help="Root folder containing *_songs feature folders (default: data/processed).",
+    )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Optional output path for timeline_points.bin (default under processed root).",
+    )
+    args = parser.parse_args()
+
+    if args.timeline_only:
+        rebuildTimeline(processedRoot=args.processed_root, outPath=args.out)
+    else:
+        extractSongFeatures()
 
 
 if __name__ == "__main__":

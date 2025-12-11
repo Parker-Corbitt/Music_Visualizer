@@ -66,9 +66,11 @@ vertex VertexOut vertex_main(const device VertexIn *vertices [[buffer(0)]],
     };
     float hp = clamp(vertices[vid].hpRatio, 0.0, 1.0);
     float alpha = mix(0.4, 1.0, clamp(vertices[vid].scalar, 0.0, 1.0));
-    uint band = uint(round(hp * 4.0));
-    band = clamp(band, 0u, 4u);
-    float3 baseColor = palette[band];
+    float t = clamp(hp * 4.0, 0.0, 4.0);
+    uint idx0 = uint(floor(t));
+    uint idx1 = min(idx0 + 1u, 4u);
+    float frac = t - float(idx0);
+    float3 baseColor = mix(palette[idx0], palette[idx1], frac);
     out.color = float4(baseColor, alpha);
 
     // Set point size
