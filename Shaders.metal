@@ -46,6 +46,10 @@ struct Uniforms {
     float4x4 inverseViewProjectionMatrix;
     float3 cameraPosition;
     uint lightingEnabled;
+    uint volumeTransferMode;
+    uint _padUniform;
+    float densityScale;
+    float opacityScale;
 };
 
 
@@ -672,6 +676,29 @@ inline float sampleScalarGrid(const device float *grid,
     return mix(c0, c1, frac.z);
 }
 
+inline void applyTransfer(uint mode, float density, thread float3 &color, thread float &opacity) {
+    float d = clamp(density, 0.0, 1.0);
+    switch (mode) {
+        case 1u: { // Ember: warm, higher opacity for mid-high densities
+            float shaped = pow(d, 0.85);
+            color = mix(float3(0.25, 0.08, 0.04), float3(1.0, 0.75, 0.25), shaped);
+            opacity = pow(d, 1.15) * 0.28;
+            break;
+        }
+        case 2u: { // Glacial: cool blues with sharper falloff
+            float shaped = pow(d, 1.4);
+            color = mix(float3(0.05, 0.15, 0.25), float3(0.55, 0.95, 1.0), shaped);
+            opacity = pow(d, 1.8) * 0.35;
+            break;
+        }
+        default: { // Classic: original warm-cool blend
+            color = mix(float3(0.1, 0.2, 0.4), float3(0.9, 0.45, 0.15), d);
+            opacity = d * 0.15;
+            break;
+        }
+    }
+}
+
 fragment float4 volume_fragment_main(VolumeVOut in [[stage_in]],
                                      constant Uniforms &uniforms [[buffer(1)]],
                                      constant VoxelGridInfo &info [[buffer(2)]],
@@ -700,14 +727,13 @@ fragment float4 volume_fragment_main(VolumeVOut in [[stage_in]],
 
     float3 accumColor = float3(0.0);
     float accumAlpha = 0.0;
-    const float3 colorLow = float3(0.1, 0.2, 0.4);
-    const float3 colorHigh = float3(0.9, 0.45, 0.15);
-
     for (int i = 0; i < kSteps && accumAlpha < 0.98; ++i) {
         float3 samplePos = rayOrigin + rayDir * (t + 0.5 * dt);
-        float density = clamp(sampleScalarGrid(scalarGrid, info, samplePos), 0.0, 1.0);
-        float opacity = density * 0.15;
-        float3 color = mix(colorLow, colorHigh, density);
+        float density = clamp(sampleScalarGrid(scalarGrid, info, samplePos) * uniforms.densityScale, 0.0, 1.0);
+        float3 color;
+        float opacity;
+        applyTransfer(uniforms.volumeTransferMode, density, color, opacity);
+        opacity *= uniforms.opacityScale;
 
         float oneMinusA = 1.0 - accumAlpha;
         accumColor += color * opacity * oneMinusA;

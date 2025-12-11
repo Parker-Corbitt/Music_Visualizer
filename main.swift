@@ -42,6 +42,38 @@ class PointCloudControlBar: NSView {
         button.state = .on
         return button
     }()
+    private lazy var transferControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(
+            labels: ["Classic", "Ember", "Glacial"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(transferChanged(_:))
+        )
+        control.selectedSegment = 0
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.isEnabled = false
+        return control
+    }()
+    private lazy var densitySlider: NSSlider = {
+        let slider = NSSlider(value: 1.0, minValue: 0.1, maxValue: 3.0, target: self, action: #selector(densityChanged(_:)))
+        slider.isContinuous = true
+        slider.isEnabled = false
+        slider.controlSize = .small
+        slider.numberOfTickMarks = 0
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        return slider
+    }()
+    private lazy var opacitySlider: NSSlider = {
+        let slider = NSSlider(value: 1.0, minValue: 0.05, maxValue: 1.5, target: self, action: #selector(opacityChanged(_:)))
+        slider.isContinuous = true
+        slider.isEnabled = false
+        slider.controlSize = .small
+        slider.numberOfTickMarks = 0
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        return slider
+    }()
+    private let densityLabel = NSTextField(labelWithString: "Density: 1.0")
+    private let opacityLabel = NSTextField(labelWithString: "Opacity: 1.0")
     private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
     private lazy var isovalueSlider: NSSlider = {
         let slider = NSSlider(value: 0.5, minValue: 0.0, maxValue: 1.0, target: self, action: #selector(isovalueChanged(_:)))
@@ -57,7 +89,7 @@ class PointCloudControlBar: NSView {
     }()
     private lazy var modeControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
-            labels: ["Song", "Trend", "Timeline"],
+            labels: ["Song", "Timeline"],
             trackingMode: .selectOne,
             target: self,
             action: #selector(modeChanged(_:))
@@ -92,13 +124,27 @@ class PointCloudControlBar: NSView {
             meshAlgorithmControl.isEnabled = renderer.surfaceMode == .mesh
             lightingButton.state = renderer.lightingEnabled ? .on : .off
             lightingButton.isEnabled = renderer.surfaceMode == .mesh
+            transferControl.selectedSegment = segmentIndex(for: renderer.volumeTransferMode)
+            transferControl.isEnabled = renderer.surfaceMode == .volume
+            densitySlider.doubleValue = Double(renderer.densityScale)
+            opacitySlider.doubleValue = Double(renderer.opacityScale)
+            densitySlider.isEnabled = renderer.surfaceMode == .volume
+            opacitySlider.isEnabled = renderer.surfaceMode == .volume
+            updateDensityLabel(Float(densitySlider.doubleValue))
+            updateOpacityLabel(Float(opacitySlider.doubleValue))
             updateIsovalueLabel(renderer.isovalue)
         }
+        updateControlVisibility(for: renderer.surfaceMode)
 
         let stack = NSStackView(views: [
             modeControl,
             openButton,
             renderStyleControl,
+            transferControl,
+            densityLabel,
+            densitySlider,
+            opacityLabel,
+            opacitySlider,
             meshAlgorithmControl,
             lightingButton,
             isovalueLabel,
@@ -123,6 +169,9 @@ class PointCloudControlBar: NSView {
             isovalueSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             meshAlgorithmControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             lightingButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 70),
+            transferControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            densitySlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
+            opacitySlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
             cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
         ])
 
@@ -139,8 +188,6 @@ class PointCloudControlBar: NSView {
     func updateSelectedFileName(_ name: String?) {
         let modeText: String
         switch renderer?.currentMode {
-        case .some(.trend):
-            modeText = "Trend"
         case .some(.timeline):
             modeText = "Timeline"
         default:
@@ -199,9 +246,7 @@ class PointCloudControlBar: NSView {
     @objc private func renderStyleChanged(_ sender: NSSegmentedControl) {
         guard let mode = surfaceMode(forSegment: sender.selectedSegment) else { return }
         renderer?.setSurfaceMode(mode)
-        isovalueSlider.isEnabled = (mode == .mesh)
-        meshAlgorithmControl.isEnabled = (mode == .mesh)
-        lightingButton.isEnabled = (mode == .mesh)
+        updateControlVisibility(for: mode)
     }
 
     @objc private func meshAlgorithmChanged(_ sender: NSSegmentedControl) {
@@ -211,6 +256,23 @@ class PointCloudControlBar: NSView {
 
     @objc private func lightingToggled(_ sender: NSButton) {
         renderer?.setLightingEnabled(sender.state == .on)
+    }
+
+    @objc private func transferChanged(_ sender: NSSegmentedControl) {
+        guard let mode = transferMode(forSegment: sender.selectedSegment) else { return }
+        renderer?.setVolumeTransferMode(mode)
+    }
+
+    @objc private func densityChanged(_ sender: NSSlider) {
+        let value = Float(sender.doubleValue)
+        renderer?.setDensityScale(value)
+        updateDensityLabel(value)
+    }
+
+    @objc private func opacityChanged(_ sender: NSSlider) {
+        let value = Float(sender.doubleValue)
+        renderer?.setOpacityScale(value)
+        updateOpacityLabel(value)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {
@@ -223,6 +285,14 @@ class PointCloudControlBar: NSView {
         isovalueLabel.stringValue = String(format: "Isovalue: %.2f", value)
     }
 
+    private func updateDensityLabel(_ value: Float) {
+        densityLabel.stringValue = String(format: "Density: %.2f", value)
+    }
+
+    private func updateOpacityLabel(_ value: Float) {
+        opacityLabel.stringValue = String(format: "Opacity: %.2f", value)
+    }
+
     private func segmentIndex(for mode: SurfaceRenderMode) -> Int {
         switch mode {
         case .pointCloud: return 0
@@ -231,19 +301,25 @@ class PointCloudControlBar: NSView {
         }
     }
 
+    private func segmentIndex(for mode: VolumeTransferMode) -> Int {
+        switch mode {
+        case .classic: return 0
+        case .ember: return 1
+        case .glacial: return 2
+        }
+    }
+
     private func segmentIndex(for mode: RenderMode) -> Int {
         switch mode {
         case .song: return 0
-        case .trend: return 1
-        case .timeline: return 2
+        case .timeline: return 1
         }
     }
 
     private func renderMode(for segment: Int) -> RenderMode? {
         switch segment {
         case 0: return .song
-        case 1: return .trend
-        case 2: return .timeline
+        case 1: return .timeline
         default: return nil
         }
     }
@@ -257,8 +333,39 @@ class PointCloudControlBar: NSView {
         }
     }
 
+    private func transferMode(forSegment segment: Int) -> VolumeTransferMode? {
+        switch segment {
+        case 0: return .classic
+        case 1: return .ember
+        case 2: return .glacial
+        default: return nil
+        }
+    }
+
     private func refreshStatusLabel() {
         updateSelectedFileName(renderer?.activePointCloudName())
+    }
+
+    private func updateControlVisibility(for mode: SurfaceRenderMode) {
+        let meshVisible = (mode == .mesh)
+        let volumeVisible = (mode == .volume)
+
+        isovalueLabel.isHidden = !meshVisible
+        isovalueSlider.isHidden = !meshVisible
+        meshAlgorithmControl.isHidden = !meshVisible
+        lightingButton.isHidden = !meshVisible
+        isovalueSlider.isEnabled = meshVisible
+        meshAlgorithmControl.isEnabled = meshVisible
+        lightingButton.isEnabled = meshVisible
+
+        transferControl.isHidden = !volumeVisible
+        densityLabel.isHidden = !volumeVisible
+        densitySlider.isHidden = !volumeVisible
+        opacityLabel.isHidden = !volumeVisible
+        opacitySlider.isHidden = !volumeVisible
+        transferControl.isEnabled = volumeVisible
+        densitySlider.isEnabled = volumeVisible
+        opacitySlider.isEnabled = volumeVisible
     }
 }
 

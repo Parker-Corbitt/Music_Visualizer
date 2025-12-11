@@ -8,7 +8,10 @@ struct Uniforms {
     var inverseViewProjectionMatrix: matrix_float4x4
     var cameraPosition: SIMD3<Float>
     var lightingEnabled: UInt32 = 1
-    var _padUniform: SIMD3<UInt32> = .zero
+    var volumeTransferMode: UInt32 = 0
+    var _padUniform: UInt32 = 0
+    var densityScale: Float = 1.0
+    var opacityScale: Float = 1.0
 }
 
 struct PointVertex {
@@ -49,7 +52,6 @@ struct IsoSurfaceParams {
 
 enum RenderMode {
     case song
-    case trend
     case timeline
 }
 
@@ -57,6 +59,12 @@ enum SurfaceRenderMode {
     case pointCloud
     case mesh
     case volume
+}
+
+enum VolumeTransferMode: UInt32 {
+    case classic = 0
+    case ember = 1
+    case glacial = 2
 }
 
 enum MeshAlgorithm {
@@ -149,7 +157,6 @@ class Renderer: NSObject, MTKViewDelegate {
     // Point cloud resources
     private var activePointCloud: PointCloudResource?
     private var songPointCloud: PointCloudResource?
-    private var trendPointCloud: PointCloudResource?
     private var timelinePointCloud: PointCloudResource?
 
     // Rendering modes
@@ -159,6 +166,9 @@ class Renderer: NSObject, MTKViewDelegate {
     // Rendering options
     private(set) var lightingEnabled: Bool = true
     private(set) var meshAlgorithm: MeshAlgorithm = .marchingTetrahedra
+    private(set) var volumeTransferMode: VolumeTransferMode = .classic
+    private(set) var densityScale: Float = 1.0
+    private(set) var opacityScale: Float = 1.0
 
     // Volume and mesh data
     private var meshNeedsRebuild = false
@@ -239,26 +249,6 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// Load the precomputed trend-mode point cloud.
-    @discardableResult
-    func loadTrendPointCloud(at path: String = "data/processed/trend_points.bin") -> Bool {
-        let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
-        if let buffer = result.buffer, result.count > 0 {
-            let name = URL(fileURLWithPath: path).lastPathComponent
-            self.trendPointCloud = PointCloudResource(buffer: buffer,
-                                                      count: result.count,
-                                                      name: name,
-                                                      boundsMin: result.boundsMin,
-                                                      boundsMax: result.boundsMax)
-            refreshActivePointCloud()
-            print("[Renderer] Loaded trend point cloud from: \(path) (vertices: \(result.count))")
-            return true
-        } else {
-            print("[Renderer] Failed to load trend point cloud from: \(path)")
-            return false
-        }
-    }
-
     /// Load the chronological timeline point cloud built from all songs.
     @discardableResult
     func loadTimelinePointCloud(at path: String = "data/processed/timeline_points.bin") -> Bool {
@@ -279,7 +269,7 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// Switch rendering modes (song / trend / timeline) and ensure buffers are loaded.
+    /// Switch rendering modes (song / timeline) and ensure buffers are loaded.
     /// Returns true if a buffer is ready for the chosen mode.
     @discardableResult
     func setMode(_ mode: RenderMode) -> Bool {
@@ -306,15 +296,23 @@ class Renderer: NSObject, MTKViewDelegate {
         invalidateDerivedSurfaces()
     }
 
+    func setVolumeTransferMode(_ mode: VolumeTransferMode) {
+        volumeTransferMode = mode
+    }
+
+    func setDensityScale(_ scale: Float) {
+        densityScale = max(0.0, scale)
+    }
+
+    func setOpacityScale(_ scale: Float) {
+        opacityScale = max(0.0, scale)
+    }
+
     private func ensurePointCloudLoaded(for mode: RenderMode) {
         switch mode {
         case .song:
             if songPointCloud == nil {
                 _ = loadInitialSongPointCloudIfAvailable()
-            }
-        case .trend:
-            if trendPointCloud == nil {
-                _ = loadTrendPointCloud()
             }
         case .timeline:
             if timelinePointCloud == nil {
@@ -328,8 +326,6 @@ class Renderer: NSObject, MTKViewDelegate {
         switch currentMode {
         case .song:
             return songPointCloud?.name
-        case .trend:
-            return trendPointCloud?.name
         case .timeline:
             return timelinePointCloud?.name
         }
@@ -415,8 +411,6 @@ class Renderer: NSObject, MTKViewDelegate {
         switch currentMode {
         case .song:
             activePointCloud = songPointCloud
-        case .trend:
-            activePointCloud = trendPointCloud
         case .timeline:
             activePointCloud = timelinePointCloud
         }
@@ -843,7 +837,10 @@ class Renderer: NSObject, MTKViewDelegate {
             modelMatrix: matrix_identity_float4x4,
             inverseViewProjectionMatrix: inverseViewProjection,
             cameraPosition: camera.position,
-            lightingEnabled: lightingEnabled ? 1 : 0
+            lightingEnabled: lightingEnabled ? 1 : 0,
+            volumeTransferMode: volumeTransferMode.rawValue,
+            densityScale: densityScale,
+            opacityScale: opacityScale
         )
 
         uniformBuffer = device.makeBuffer(bytes: &uniforms, length: MemoryLayout<Uniforms>.size, options: [])
