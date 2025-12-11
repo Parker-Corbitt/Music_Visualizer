@@ -2,7 +2,7 @@
 
 ## Abstract
 
-This project visualizes the relationship between loudness and amplitude in popular music using a dual-mode system that operates at both macro and micro scales. Audio features from representative tracks across multiple decades are processed into 3D scalar fields, which are visualized using two high-level computer graphics methods: isosurface extraction and GPU-based ray-marched volume rendering. In this formulation, each volume is treated as an audio density field, and ray marching integrates that density along viewing rays to reveal where particular loudness behaviors are persistent or dominant. Isosurfaces extracted from these volumes are then color-mapped using additional attributes such as decade or frequency band, effectively encoding a fourth data dimension into hue. The system supports an aggregate trend mode that shows decade-level evolution in the relationship between physical amplitude and perceived loudness via a 3D histogram volume, and an individual song mode that reveals fine-scale loudness structure within each track. This provides a comprehensive visualization framework for analyzing and exploring audio dynamics through advanced rendering techniques.
+This project visualizes the relationship between loudness and amplitude in popular music using a dual-mode system that operates at both macro and micro scales. Audio features from representative tracks across multiple decades are processed into 3D scalar fields, which are visualized using two high-level computer graphics methods: isosurface extraction and GPU-based ray-marched volume rendering. In this formulation, each volume is treated as an audio density field, and ray marching integrates that density along viewing rays to reveal where particular loudness behaviors are persistent or dominant. Isosurfaces extracted from point cloud derived volumes are color-mapped using additional loudness related attributes, encoding a fourth data dimension into hue. The system supports an aggregate trend mode that shows decade-level evolution in the relationship between physical amplitude and perceived loudness via a 3D histogram volume, and an individual song mode that reveals fine-scale loudness structure within each track. This provides a comprehensive visualization framework for analyzing and exploring audio dynamics through advanced rendering techniques.
 
 ## Motivation
 
@@ -40,10 +40,10 @@ In this formulation, the scalar field encodes how perceived loudness varies acro
 
 The system implements *at least* these two extraction algorithms:
 
-- Marching Cubes
+- Marching Tetrahedrons
 - Dual Contouring
 
-Both operate on the same scalar field. In Song Mode, this field is perceived loudness evaluated over (time, amplitude, frequency); in Trend Mode, it is a loudness density over (amplitude, loudness, decade). The algorithms generate meshes representing **isosurfaces of this scalar field**—for example, constant perceived-loudness surfaces in Song Mode and constant loudness-density surfaces in Trend Mode. An adjustable isovalue selects which scalar level to visualize, and surfaces are shaded with per-vertex normals.
+In Song Mode, this field is perceived loudness evaluated over (time, amplitude, frequency); in Trend Mode, it is a loudness density over (amplitude, loudness, decade). The algorithms generate meshes representing **isosurfaces of this scalar field**. For example, constant perceived-loudness surfaces in Song Mode and constant loudness-density surfaces in Trend Mode. An adjustable isovalue selects which scalar level to visualize, and surfaces are shaded with per-vertex normals.
 
 ### Ray-Marched Volume Rendering
 
@@ -92,7 +92,7 @@ Goal: Get isosurfaces working for both modes.
 
 ### Tasks
 
-- Implement Marching Cubes (first, simplest)
+- Implement Marching Tetrahedrons (first, simplest)
 - Add ability to extract surfaces from:
   - Song Mode volumes
   - Trend Mode volume
@@ -104,7 +104,7 @@ Goal: Get isosurfaces working for both modes.
   
 ### Deliverable
 
-Isosurface extraction working interactively on both datasets (at least Marching Cubes).
+Isosurface extraction working interactively on both datasets (at least Marching Tetrahedrons).
 
 ## Week 3 — Ray-Marched Volume Rendering + Integration
 
@@ -134,7 +134,7 @@ Goal: Evaluate, polish, and document.
   - clarity
   - runtime
   - complexity
-- Compare Marching Cubes vs. Tetrahedrons
+- Compare Marching Tetrahedrons vs. Dual Contouring
 - Capture screenshots, figures, and renderings for report
 - Polish UI and parameter sliders
 - Write final report:

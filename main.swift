@@ -15,7 +15,7 @@ class PointCloudControlBar: NSView {
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
     private lazy var renderStyleControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
-            labels: ["Points", "Mesh"],
+            labels: ["Points", "Mesh", "Volume"],
             trackingMode: .selectOne,
             target: self,
             action: #selector(renderStyleChanged(_:))
@@ -35,6 +35,12 @@ class PointCloudControlBar: NSView {
         control.translatesAutoresizingMaskIntoConstraints = false
         control.isEnabled = false
         return control
+    }()
+    private lazy var lightingButton: NSButton = {
+        let button = NSButton(checkboxWithTitle: "Phong", target: self, action: #selector(lightingToggled(_:)))
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.state = .on
+        return button
     }()
     private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
     private lazy var isovalueSlider: NSSlider = {
@@ -81,9 +87,11 @@ class PointCloudControlBar: NSView {
         if let renderer = self.renderer {
             renderStyleControl.selectedSegment = segmentIndex(for: renderer.surfaceMode)
             isovalueSlider.doubleValue = Double(renderer.isovalue)
-            isovalueSlider.isEnabled = renderer.surfaceMode != .pointCloud
+            isovalueSlider.isEnabled = renderer.surfaceMode == .mesh
             meshAlgorithmControl.selectedSegment = renderer.meshAlgorithm == .marchingTetrahedra ? 0 : 1
             meshAlgorithmControl.isEnabled = renderer.surfaceMode == .mesh
+            lightingButton.state = renderer.lightingEnabled ? .on : .off
+            lightingButton.isEnabled = renderer.surfaceMode == .mesh
             updateIsovalueLabel(renderer.isovalue)
         }
 
@@ -92,6 +100,7 @@ class PointCloudControlBar: NSView {
             openButton,
             renderStyleControl,
             meshAlgorithmControl,
+            lightingButton,
             isovalueLabel,
             isovalueSlider,
             statusLabel,
@@ -113,6 +122,7 @@ class PointCloudControlBar: NSView {
             isovalueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
             isovalueSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             meshAlgorithmControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            lightingButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 70),
             cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
         ])
 
@@ -181,13 +191,18 @@ class PointCloudControlBar: NSView {
     @objc private func renderStyleChanged(_ sender: NSSegmentedControl) {
         guard let mode = surfaceMode(forSegment: sender.selectedSegment) else { return }
         renderer?.setSurfaceMode(mode)
-        isovalueSlider.isEnabled = (mode != .pointCloud)
-        meshAlgorithmControl.isEnabled = (mode != .pointCloud)
+        isovalueSlider.isEnabled = (mode == .mesh)
+        meshAlgorithmControl.isEnabled = (mode == .mesh)
+        lightingButton.isEnabled = (mode == .mesh)
     }
 
     @objc private func meshAlgorithmChanged(_ sender: NSSegmentedControl) {
         let algorithm: MeshAlgorithm = (sender.selectedSegment == 0) ? .marchingTetrahedra : .dualContouring
         renderer?.setMeshAlgorithm(algorithm)
+    }
+
+    @objc private func lightingToggled(_ sender: NSButton) {
+        renderer?.setLightingEnabled(sender.state == .on)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {
@@ -203,7 +218,8 @@ class PointCloudControlBar: NSView {
     private func segmentIndex(for mode: SurfaceRenderMode) -> Int {
         switch mode {
         case .pointCloud: return 0
-        case .mesh, .isosurface: return 1
+        case .mesh: return 1
+        case .volume: return 2
         }
     }
 
@@ -211,6 +227,7 @@ class PointCloudControlBar: NSView {
         switch segment {
         case 0: return .pointCloud
         case 1: return .mesh
+        case 2: return .volume
         default: return nil
         }
     }
@@ -220,6 +237,7 @@ class PointCloudControlBar: NSView {
     }
 }
 
+// Application Setup
 let app = NSApplication.shared
 let appDelegate = AppDelegate()
 app.delegate = appDelegate
@@ -230,10 +248,10 @@ let windowSize = NSSize(width: 800, height: 600)
 let mouseLocation = NSEvent.mouseLocation
 let targetScreen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
 
+// Calculate centered window frame
 let screenFrame = targetScreen?.visibleFrame ?? NSScreen.main!.visibleFrame
 let originX = screenFrame.origin.x + (screenFrame.size.width  - windowSize.width)  / 2
 let originY = screenFrame.origin.y + (screenFrame.size.height - windowSize.height) / 2
-
 let windowRect = NSRect(x: originX, y: originY, width: windowSize.width, height: windowSize.height)
 
 // Create the window centered on the currently focused screen
@@ -245,7 +263,7 @@ let window = NSWindow(
 )
 
 //Window Title
-window.title = "music_visualizer"
+window.title = "Music Visualizer"
 window.makeKeyAndOrderFront(nil)
 
 guard let device = MTLCreateSystemDefaultDevice() else {

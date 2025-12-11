@@ -5,6 +5,10 @@ import simd
 struct Uniforms {
     var viewProjectionMatrix: matrix_float4x4
     var modelMatrix: matrix_float4x4
+    var inverseViewProjectionMatrix: matrix_float4x4
+    var cameraPosition: SIMD3<Float>
+    var lightingEnabled: UInt32 = 1
+    var _padUniform: SIMD3<UInt32> = .zero
 }
 
 struct PointVertex {
@@ -49,7 +53,7 @@ enum RenderMode {
 enum SurfaceRenderMode {
     case pointCloud
     case mesh
-    case isosurface
+    case volume
 }
 
 enum MeshAlgorithm {
@@ -58,17 +62,6 @@ enum MeshAlgorithm {
 }
 
 struct SongPointCloudLoader {
-    /// Load a song-mode point cloud from a raw float32 binary file.
-    ///
-    /// The file layout must be:
-    ///     [x, y, z, scalar, hp_ratio] per vertex (all Float32),
-    /// where x,y,z are already normalized into clip-space-ish coordinates,
-    /// scalar is A-weighted loudness in [0,1],
-    /// and hp_ratio is harmonic–percussive ratio in [0,1].
-    ///
-    /// Returns:
-    ///   - buffer: MTLBuffer containing an array of PointVertex
-    ///   - count:  number of vertices in the buffer
     static func loadPointCloud(device: MTLDevice, from path: String) -> (buffer: MTLBuffer?, count: Int) {
         let url = URL(fileURLWithPath: path)
         guard let data = try? Data(contentsOf: url) else {
@@ -121,11 +114,21 @@ struct SongPointCloudLoader {
 }
 
 class Renderer: NSObject, MTKViewDelegate {
+
+    // Metal objects
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     var pointPipelineState: MTLRenderPipelineState!
     var meshPipelineState: MTLRenderPipelineState!
+    var volumePipelineState: MTLRenderPipelineState!
     var depthState: MTLDepthStencilState?
+    var uniformBuffer: MTLBuffer!
+
+    // Camera and input
+    var camera: Camera
+    var inputController: InputController!
+
+    // Compute pipelines
     var gridClearPipeline: MTLComputePipelineState?
     var voxelSplatPipeline: MTLComputePipelineState?
     var gridNormalizePipeline: MTLComputePipelineState?
@@ -135,29 +138,36 @@ class Renderer: NSObject, MTKViewDelegate {
     var dualEdgeYPipeline: MTLComputePipelineState?
     var dualEdgeZPipeline: MTLComputePipelineState?
 
+    // Point cloud resources
     private var activePointCloud: PointCloudResource?
-
     private var songPointCloud: PointCloudResource?
     private var trendPointCloud: PointCloudResource?
 
+    // Rendering modes
     private(set) var currentMode: RenderMode = .song
     private(set) var surfaceMode: SurfaceRenderMode = .pointCloud
-    var uniformBuffer: MTLBuffer!
-    var camera: Camera
-    var inputController: InputController!
+
+    // Rendering options
+    private(set) var lightingEnabled: Bool = true
+    private(set) var meshAlgorithm: MeshAlgorithm = .marchingTetrahedra
+
+    // Volume and mesh data
+    private var meshNeedsRebuild = false
     private var scalarGridBuffer: MTLBuffer?
-    private var gridCountsBuffer: MTLBuffer?
-    private var gridMaxCountBuffer: MTLBuffer?
+    private var gridLoudnessBuffer: MTLBuffer?
+    private var gridMaxLoudnessBuffer: MTLBuffer?
+    private var gridHpAccumBuffer: MTLBuffer?
+    private var gridHpCountBuffer: MTLBuffer?
+    private var gridHpBuffer: MTLBuffer?
     private var meshVertexBuffer: MTLBuffer?
     private var meshVertexCountBuffer: MTLBuffer?
     private var dualCellVertexBuffer: MTLBuffer?
     private var dualCellMaskBuffer: MTLBuffer?
     private var meshVertexCount: Int = 0
-    private var meshNeedsRebuild = false
+    private var volumeGridDirty = true
     private let voxelResolution = SIMD3<UInt32>(64, 64, 64)
     private let gridOrigin = SIMD3<Float>(-1.0, -1.0, -1.0)
     private let maxMeshVertices: Int = 600_000
-    private(set) var meshAlgorithm: MeshAlgorithm = .marchingTetrahedra
 
     private var voxelCellCount: Int {
         Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
@@ -180,8 +190,11 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     private struct MeshBuffers {
-        let counts: MTLBuffer
-        let maxCount: MTLBuffer
+        let loudness: MTLBuffer
+        let maxLoudness: MTLBuffer
+        let hpAccum: MTLBuffer
+        let hpCount: MTLBuffer
+        let hpGrid: MTLBuffer
         let scalarGrid: MTLBuffer
         let mesh: MTLBuffer
         let meshCount: MTLBuffer
@@ -245,6 +258,10 @@ class Renderer: NSObject, MTKViewDelegate {
     func setSurfaceMode(_ mode: SurfaceRenderMode) {
         surfaceMode = mode
         invalidateDerivedSurfaces()
+    }
+
+    func setLightingEnabled(_ enabled: Bool) {
+        lightingEnabled = enabled
     }
 
     func setMeshAlgorithm(_ algorithm: MeshAlgorithm) {
@@ -351,10 +368,11 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func invalidateDerivedSurfaces() {
-        if surfaceMode == .mesh {
-            meshNeedsRebuild = true
+        meshNeedsRebuild = (surfaceMode == .mesh)
+        if meshNeedsRebuild {
             meshVertexCount = 0
         }
+        volumeGridDirty = true
     }
 
     private func ensureVoxelResources(pointCount: Int) {
@@ -368,11 +386,20 @@ class Renderer: NSObject, MTKViewDelegate {
         if scalarGridBuffer == nil || scalarGridBuffer!.length < scalarBytes {
             scalarGridBuffer = device.makeBuffer(length: scalarBytes, options: .storageModeShared)
         }
-        if gridCountsBuffer == nil || gridCountsBuffer!.length < countBytes {
-            gridCountsBuffer = device.makeBuffer(length: countBytes, options: .storageModeShared)
+        if gridLoudnessBuffer == nil || gridLoudnessBuffer!.length < countBytes {
+            gridLoudnessBuffer = device.makeBuffer(length: countBytes, options: .storageModeShared)
         }
-        if gridMaxCountBuffer == nil {
-            gridMaxCountBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
+        if gridMaxLoudnessBuffer == nil {
+            gridMaxLoudnessBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.stride, options: .storageModeShared)
+        }
+        if gridHpAccumBuffer == nil || gridHpAccumBuffer!.length < countBytes {
+            gridHpAccumBuffer = device.makeBuffer(length: countBytes, options: .storageModeShared)
+        }
+        if gridHpCountBuffer == nil || gridHpCountBuffer!.length < countBytes {
+            gridHpCountBuffer = device.makeBuffer(length: countBytes, options: .storageModeShared)
+        }
+        if gridHpBuffer == nil || gridHpBuffer!.length < scalarBytes {
+            gridHpBuffer = device.makeBuffer(length: scalarBytes, options: .storageModeShared)
         }
         if meshVertexBuffer == nil || meshVertexBuffer!.length < meshBytes {
             meshVertexBuffer = device.makeBuffer(length: meshBytes, options: .storageModeShared)
@@ -389,8 +416,11 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func meshBuffers() -> MeshBuffers? {
-        guard let counts = gridCountsBuffer,
-              let maxCount = gridMaxCountBuffer,
+        guard let loudness = gridLoudnessBuffer,
+              let maxLoudness = gridMaxLoudnessBuffer,
+              let hpAccum = gridHpAccumBuffer,
+              let hpCount = gridHpCountBuffer,
+              let hpGrid = gridHpBuffer,
               let scalarGrid = scalarGridBuffer,
               let mesh = meshVertexBuffer,
               let meshCount = meshVertexCountBuffer else {
@@ -398,8 +428,11 @@ class Renderer: NSObject, MTKViewDelegate {
         }
 
         return MeshBuffers(
-            counts: counts,
-            maxCount: maxCount,
+            loudness: loudness,
+            maxLoudness: maxLoudness,
+            hpAccum: hpAccum,
+            hpCount: hpCount,
+            hpGrid: hpGrid,
             scalarGrid: scalarGrid,
             mesh: mesh,
             meshCount: meshCount,
@@ -446,6 +479,9 @@ class Renderer: NSObject, MTKViewDelegate {
             if let mask = buffers.dualMask {
                 blit.fill(buffer: mask, range: 0..<mask.length, value: 0)
             }
+            blit.fill(buffer: buffers.maxLoudness, range: 0..<MemoryLayout<UInt32>.stride, value: 0)
+            blit.fill(buffer: buffers.hpAccum, range: 0..<buffers.hpAccum.length, value: 0)
+            blit.fill(buffer: buffers.hpCount, range: 0..<buffers.hpCount.length, value: 0)
             blit.endEncoding()
         }
     }
@@ -462,23 +498,30 @@ class Renderer: NSObject, MTKViewDelegate {
         }
 
         dispatchCompute(clearPipeline, commandBuffer: commandBuffer, threads: voxelCellCount) { encoder in
-            encoder.setBuffer(buffers.counts, offset: 0, index: 0)
+            encoder.setBuffer(buffers.loudness, offset: 0, index: 0)
             encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-            encoder.setBuffer(buffers.maxCount, offset: 0, index: 2)
+            encoder.setBuffer(buffers.maxLoudness, offset: 0, index: 2)
+            encoder.setBuffer(buffers.hpAccum, offset: 0, index: 3)
+            encoder.setBuffer(buffers.hpCount, offset: 0, index: 4)
         }
 
         dispatchCompute(splatPipeline, commandBuffer: commandBuffer, threads: pointCloud.count) { encoder in
             encoder.setBuffer(pointCloud.buffer, offset: 0, index: 0)
             encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
-            encoder.setBuffer(buffers.counts, offset: 0, index: 2)
-            encoder.setBuffer(buffers.maxCount, offset: 0, index: 3)
+            encoder.setBuffer(buffers.loudness, offset: 0, index: 2)
+            encoder.setBuffer(buffers.maxLoudness, offset: 0, index: 3)
+            encoder.setBuffer(buffers.hpAccum, offset: 0, index: 4)
+            encoder.setBuffer(buffers.hpCount, offset: 0, index: 5)
         }
 
         dispatchCompute(normalizePipeline, commandBuffer: commandBuffer, threads: voxelCellCount) { encoder in
-            encoder.setBuffer(buffers.counts, offset: 0, index: 0)
+            encoder.setBuffer(buffers.loudness, offset: 0, index: 0)
             encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
             encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 2)
-            encoder.setBuffer(buffers.maxCount, offset: 0, index: 3)
+            encoder.setBuffer(buffers.maxLoudness, offset: 0, index: 3)
+            encoder.setBuffer(buffers.hpAccum, offset: 0, index: 4)
+            encoder.setBuffer(buffers.hpCount, offset: 0, index: 5)
+            encoder.setBuffer(buffers.hpGrid, offset: 0, index: 6)
         }
 
         return true
@@ -492,20 +535,23 @@ class Renderer: NSObject, MTKViewDelegate {
             print("[Renderer] Marching tetrahedra pipeline missing.")
             return false
         }
+
+        // Dispatch the marching tetrahedra compute shader
         dispatchCompute(marchingPipeline, commandBuffer: commandBuffer, threads: max(voxelCubeCount, 1)) { encoder in
             encoder.setBuffer(buffers.scalarGrid, offset: 0, index: 0)
             encoder.setBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 1)
             encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
             encoder.setBuffer(buffers.mesh, offset: 0, index: 3)
             encoder.setBuffer(buffers.meshCount, offset: 0, index: 4)
+            encoder.setBuffer(buffers.hpGrid, offset: 0, index: 5)
         }
         return true
     }
 
     private func runDualContouring(gridInfo: inout VoxelGridInfo,
-                                  isoParams: inout IsoSurfaceParams,
-                                  buffers: MeshBuffers,
-                                  commandBuffer: MTLCommandBuffer) -> Bool {
+                                   isoParams: inout IsoSurfaceParams,
+                                   buffers: MeshBuffers,
+                                   commandBuffer: MTLCommandBuffer) -> Bool {
         guard let cellPipeline = dualCellPipeline,
               let edgeXPipe = dualEdgeXPipeline,
               let edgeYPipe = dualEdgeYPipeline,
@@ -522,6 +568,7 @@ class Renderer: NSObject, MTKViewDelegate {
             encoder.setBytes(&isoParams, length: MemoryLayout<IsoSurfaceParams>.stride, index: 2)
             encoder.setBuffer(cellVerts, offset: 0, index: 3)
             encoder.setBuffer(cellMask, offset: 0, index: 4)
+            encoder.setBuffer(buffers.hpGrid, offset: 0, index: 5)
         }
 
         dispatchCompute(edgeXPipe, commandBuffer: commandBuffer, threads: max(edgeXCount, 1)) { encoder in
@@ -555,6 +602,24 @@ class Renderer: NSObject, MTKViewDelegate {
         }
 
         return true
+    }
+
+    private func rebuildVolumeGridIfNeeded() {
+        guard volumeGridDirty, let pointCloud = activePointCloud, pointCloud.count > 0 else { return }
+        ensureVoxelResources(pointCount: pointCloud.count)
+        guard let buffers = meshBuffers(),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            volumeGridDirty = false
+            return
+        }
+        var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+        _ = prepareScalarGrid(pointCloud: pointCloud,
+                              gridInfo: &gridInfo,
+                              buffers: buffers,
+                              commandBuffer: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        volumeGridDirty = false
     }
 
 
@@ -615,6 +680,7 @@ class Renderer: NSObject, MTKViewDelegate {
             meshVertexCount = 0
         }
         meshNeedsRebuild = false
+        volumeGridDirty = false
     }
 
     init(view: MTKView) {
@@ -635,6 +701,8 @@ class Renderer: NSObject, MTKViewDelegate {
         let pointFragmentFunction = library.makeFunction(name: "fragment_main")
         let meshVertexFunction = library.makeFunction(name: "mesh_vertex_main")
         let meshFragmentFunction = library.makeFunction(name: "mesh_fragment_main")
+        let volumeVertexFunction = library.makeFunction(name: "volume_vertex_main")
+        let volumeFragmentFunction = library.makeFunction(name: "volume_fragment_main")
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
@@ -653,9 +721,16 @@ class Renderer: NSObject, MTKViewDelegate {
         meshDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
         meshDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
 
+        let volumeDescriptor = MTLRenderPipelineDescriptor()
+        volumeDescriptor.vertexFunction = volumeVertexFunction
+        volumeDescriptor.fragmentFunction = volumeFragmentFunction
+        volumeDescriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        volumeDescriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
+
         do {
             pointPipelineState = try device.makeRenderPipelineState(descriptor: pointDescriptor)
             meshPipelineState = try device.makeRenderPipelineState(descriptor: meshDescriptor)
+            volumePipelineState = try device.makeRenderPipelineState(descriptor: volumeDescriptor)
             if let clearFn = library.makeFunction(name: "clearGrid") {
                 gridClearPipeline = try device.makeComputePipelineState(function: clearFn)
             }
@@ -693,9 +768,17 @@ class Renderer: NSObject, MTKViewDelegate {
         inputController.update()
         rebuildMeshIfNeeded()
 
+        let viewMatrix = camera.viewMatrix()
+        let projectionMatrix = camera.projectionMatrix()
+        let viewProjection = matrix_multiply(projectionMatrix, viewMatrix)
+        let inverseViewProjection = simd_inverse(viewProjection)
+
         var uniforms = Uniforms(
-            viewProjectionMatrix: matrix_multiply(camera.projectionMatrix(), camera.viewMatrix()),
-            modelMatrix: matrix_identity_float4x4
+            viewProjectionMatrix: viewProjection,
+            modelMatrix: matrix_identity_float4x4,
+            inverseViewProjectionMatrix: inverseViewProjection,
+            cameraPosition: camera.position,
+            lightingEnabled: lightingEnabled ? 1 : 0
         )
 
         uniformBuffer = device.makeBuffer(bytes: &uniforms, length: MemoryLayout<Uniforms>.size, options: [])
@@ -707,12 +790,17 @@ class Renderer: NSObject, MTKViewDelegate {
 
         encoder.setDepthStencilState(depthState)
         encoder.setVertexBuffer(uniformBuffer, offset: 0, index: 1)
+        encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 1)
         encoder.setFrontFacing(.counterClockwise)
-        let cull: MTLCullMode = (surfaceMode == .mesh && meshAlgorithm == .dualContouring) ? .none : .back
+        let cull: MTLCullMode = (surfaceMode == .mesh && meshAlgorithm == .dualContouring) || surfaceMode == .volume ? .none : .back
         encoder.setCullMode(cull)
 
+        if surfaceMode == .volume {
+            rebuildVolumeGridIfNeeded()
+        }
+
         switch surfaceMode {
-        case .mesh, .isosurface:
+        case .mesh:
             if meshVertexCount > 0, let meshBuf = meshVertexBuffer {
                 encoder.setRenderPipelineState(meshPipelineState)
                 encoder.setVertexBuffer(meshBuf, offset: 0, index: 0)
@@ -726,6 +814,13 @@ class Renderer: NSObject, MTKViewDelegate {
             encoder.setRenderPipelineState(pointPipelineState)
             encoder.setVertexBuffer(pointCloud.buffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: pointCloud.count)
+        case .volume:
+            guard let scalarGrid = scalarGridBuffer else { break }
+            encoder.setRenderPipelineState(volumePipelineState)
+            var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+            encoder.setFragmentBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 2)
+            encoder.setFragmentBuffer(scalarGrid, offset: 0, index: 3)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
 
         encoder.endEncoding()
