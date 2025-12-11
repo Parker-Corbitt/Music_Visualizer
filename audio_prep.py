@@ -534,12 +534,14 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
 def buildTimelinePointCloud(
     processedRoot: str | Path = "data/processed",
     outPath: str | Path | None = None,
-    maxFramesPerSong: int = 1000,
+    maxFramesPerSong: int = 50000,
     songTimeScale: float = 0.8,
     baseGap: float = 0.02,
     yearGapScale: float = 0.005,
     separatorCount: int = 24,
     separatorScalar: float = 0.2,
+    crestFloorDb: float = 0.0,
+    crestCeilDb: float = 30.0,
 ) -> None:
     """Construct a single point cloud that stitches all songs chronologically.
 
@@ -551,7 +553,7 @@ def buildTimelinePointCloud(
         * x: in-song time scaled by ``songTimeScale`` plus a translation that
              accumulates with year gaps so songs appear in chronological order.
         * y: normalized amplitude (RMS) mapped to [-1, 1].
-        * z: normalized per-song dynamic range mapped to [-1, 1].
+        * z: per-frame crest factor (peak vs RMS) mapped to [-1, 1].
         * scalar: normalized A-weighted loudness, used by the renderer for
                   alpha/intensity.
         * hp_ratio: normalized release year in [0, 1] to give a color ramp
@@ -578,6 +580,10 @@ def buildTimelinePointCloud(
         Number of points to emit for a vertical separator between songs.
     separatorScalar : float
         Scalar (alpha driver) for separator points; keep small so they read subtly.
+    crestFloorDb : float
+        Minimum crest factor (dB) used for normalization; values below are clamped.
+    crestCeilDb : float
+        Maximum crest factor (dB) used for normalization; values above are clamped.
     """
     root = Path(processedRoot)
     if outPath is None:
@@ -609,16 +615,19 @@ def buildTimelinePointCloud(
             with np.load(feat_path) as data:
                 if (
                     "rms" not in data
-                    or "dynamic_range_db" not in data
                     or "hop_length" not in data
                     or "sample_rate" not in data
+                    or "magnitude_db" not in data
+                    or "loudness_db" not in data
                 ):
                     print(
                         f"[buildTimelinePointCloud] Missing required fields in {feat_path.name};"
-                        " expected rms, dynamic_range_db, hop_length, sample_rate."
+                        " expected rms, magnitude_db, loudness_db, hop_length, sample_rate."
                     )
                     continue
                 rms = np.asarray(data["rms"], dtype=np.float32)
+                magnitude_db = np.asarray(data["magnitude_db"], dtype=np.float32)
+                loudness_db = np.asarray(data["loudness_db"], dtype=np.float32)
                 loud_A = (
                     np.asarray(data["loudness_A_db"], dtype=np.float32)
                     if "loudness_A_db" in data
@@ -626,7 +635,6 @@ def buildTimelinePointCloud(
                 )
                 hop_length = int(data["hop_length"])
                 sample_rate = int(data["sample_rate"])
-                dynamic_range = float(data["dynamic_range_db"])
         except Exception as exc:  # pragma: no cover - defensive logging
             print(f"[buildTimelinePointCloud] Error reading {feat_path.name}: {exc}")
             continue
@@ -637,6 +645,8 @@ def buildTimelinePointCloud(
         frames = rms.shape[0]
         duration_sec = float(frames * hop_length) / max(sample_rate, 1)
         time_sec = np.arange(frames, dtype=np.float32) * (hop_length / float(sample_rate))
+        peak_db = magnitude_db.max(axis=0)
+        crest_db = np.clip(peak_db - loudness_db, crestFloorDb, crestCeilDb).astype(np.float32)
 
         songs.append(
             {
@@ -648,9 +658,9 @@ def buildTimelinePointCloud(
                 else (20.0 * np.log10(np.maximum(rms, 1e-10))),
                 "hop_length": hop_length,
                 "sample_rate": sample_rate,
-                "dynamic_range": dynamic_range,
                 "duration_sec": duration_sec,
                 "time_sec": time_sec,
+                "crest_array": crest_db,
             }
         )
 
@@ -661,8 +671,8 @@ def buildTimelinePointCloud(
     # Global ranges for normalization.
     min_rms = min(float(np.min(s["rms"])) for s in songs)
     max_rms = max(float(np.max(s["rms"])) for s in songs)
-    min_dyn = min(s["dynamic_range"] for s in songs)
-    max_dyn = max(s["dynamic_range"] for s in songs)
+    min_dyn = crestFloorDb
+    max_dyn = crestCeilDb
     min_year = min(s["year"] for s in songs)
     max_year = max(s["year"] for s in songs)
 
@@ -710,14 +720,15 @@ def buildTimelinePointCloud(
         loud_arr = song["loud_array"][sample_idx]
         loud01 = (loud_arr - min_loud) / loud_range
 
-        dyn01 = (song["dynamic_range"] - min_dyn) / dyn_range
+        dyn = song["crest_array"][sample_idx]
+        dyn01 = (dyn - min_dyn) / dyn_range
         dyn_ndc = dyn01 * 2.0 - 1.0
 
         year01 = (year - min_year) / year_range
 
         x = offset_x + t_scaled
         y = amp_ndc.astype(np.float32)
-        z = np.full_like(y, np.float32(dyn_ndc))
+        z = dyn_ndc.astype(np.float32)
         scalar = loud01.astype(np.float32)
         hp = np.full_like(y, np.float32(year01))
 
@@ -740,12 +751,13 @@ def buildTimelinePointCloud(
             sep_gap = baseGap + max(next_year - year, 0) * yearGapScale
             sep_x = (offset_x + span) + sep_gap * 0.5
             y_sep = np.linspace(-1.0, 1.0, separatorCount, dtype=np.float32)
+            dyn_sep = float(np.median(dyn_ndc)) if dyn_ndc.size > 0 else 0.0
             verts.append(
                 np.stack(
                     [
                         np.full_like(y_sep, np.float32(sep_x)),
                         y_sep,
-                        np.full_like(y_sep, np.float32(dyn_ndc)),
+                        np.full_like(y_sep, np.float32(dyn_sep)),
                         np.full_like(y_sep, np.float32(separatorScalar)),
                         np.full_like(y_sep, np.float32(year01)),
                     ],
