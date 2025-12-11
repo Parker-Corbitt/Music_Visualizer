@@ -184,8 +184,8 @@ class Renderer: NSObject, MTKViewDelegate {
     private var dualCellMaskBuffer: MTLBuffer?
     private var meshVertexCount: Int = 0
     private var volumeGridDirty = true
-    private let voxelResolution = SIMD3<UInt32>(64, 64, 64)
-    private let maxMeshVertices: Int = 600_000
+    private let voxelResolution = SIMD3<UInt32>(128, 128, 128)
+    private let maxMeshVertices: Int = 1_200_000
 
     private var voxelCellCount: Int {
         Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)

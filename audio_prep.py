@@ -619,15 +619,17 @@ def buildTimelinePointCloud(
                     or "sample_rate" not in data
                     or "magnitude_db" not in data
                     or "loudness_db" not in data
+                    or "hp_ratio" not in data
                 ):
                     print(
                         f"[buildTimelinePointCloud] Missing required fields in {feat_path.name};"
-                        " expected rms, magnitude_db, loudness_db, hop_length, sample_rate."
+                        " expected rms, magnitude_db, loudness_db, hp_ratio, hop_length, sample_rate."
                     )
                     continue
                 rms = np.asarray(data["rms"], dtype=np.float32)
                 magnitude_db = np.asarray(data["magnitude_db"], dtype=np.float32)
                 loudness_db = np.asarray(data["loudness_db"], dtype=np.float32)
+                hp_ratio = np.asarray(data["hp_ratio"], dtype=np.float32)
                 loud_A = (
                     np.asarray(data["loudness_A_db"], dtype=np.float32)
                     if "loudness_A_db" in data
@@ -647,6 +649,12 @@ def buildTimelinePointCloud(
         time_sec = np.arange(frames, dtype=np.float32) * (hop_length / float(sample_rate))
         peak_db = magnitude_db.max(axis=0)
         crest_db = np.clip(peak_db - loudness_db, crestFloorDb, crestCeilDb).astype(np.float32)
+        frame_hp = hp_ratio.mean(axis=0)
+        if frame_hp.shape[0] > frames:
+            frame_hp = frame_hp[:frames]
+        elif frame_hp.shape[0] < frames:
+            frame_hp = np.pad(frame_hp, (0, frames - frame_hp.shape[0]), mode="edge")
+        frame_hp = np.clip(frame_hp, 0.0, 1.0).astype(np.float32)
 
         songs.append(
             {
@@ -661,6 +669,7 @@ def buildTimelinePointCloud(
                 "duration_sec": duration_sec,
                 "time_sec": time_sec,
                 "crest_array": crest_db,
+                "hp_frame": frame_hp,
             }
         )
 
@@ -730,7 +739,7 @@ def buildTimelinePointCloud(
         y = amp_ndc.astype(np.float32)
         z = dyn_ndc.astype(np.float32)
         scalar = loud01.astype(np.float32)
-        hp = np.full_like(y, np.float32(year01))
+        hp = song["hp_frame"][sample_idx].astype(np.float32)
 
         verts.append(
             np.stack(
@@ -752,6 +761,8 @@ def buildTimelinePointCloud(
             sep_x = (offset_x + span) + sep_gap * 0.5
             y_sep = np.linspace(-1.0, 1.0, separatorCount, dtype=np.float32)
             dyn_sep = float(np.median(dyn_ndc)) if dyn_ndc.size > 0 else 0.0
+            hp_vals = song["hp_frame"][sample_idx]
+            hp_sep = float(np.median(hp_vals)) if hp_vals.size > 0 else 0.0
             verts.append(
                 np.stack(
                     [
@@ -759,7 +770,7 @@ def buildTimelinePointCloud(
                         y_sep,
                         np.full_like(y_sep, np.float32(dyn_sep)),
                         np.full_like(y_sep, np.float32(separatorScalar)),
-                        np.full_like(y_sep, np.float32(year01)),
+                        np.full_like(y_sep, np.float32(hp_sep)),
                     ],
                     axis=1,
                 )
