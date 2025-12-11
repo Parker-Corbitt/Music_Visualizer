@@ -22,6 +22,8 @@ struct PointCloudResource {
     let buffer: MTLBuffer
     let count: Int
     let name: String
+    let boundsMin: SIMD3<Float>
+    let boundsMax: SIMD3<Float>
 }
 
 struct MeshVertex {
@@ -63,27 +65,29 @@ enum MeshAlgorithm {
 }
 
 struct SongPointCloudLoader {
-    static func loadPointCloud(device: MTLDevice, from path: String) -> (buffer: MTLBuffer?, count: Int) {
+    static func loadPointCloud(device: MTLDevice, from path: String) -> (buffer: MTLBuffer?, count: Int, boundsMin: SIMD3<Float>, boundsMax: SIMD3<Float>) {
         let url = URL(fileURLWithPath: path)
         guard let data = try? Data(contentsOf: url) else {
             print("[SongPointCloudLoader] Failed to read point cloud at path: \(path)")
-            return (nil, 0)
+            return (nil, 0, .zero, .zero)
         }
 
         let floatCount = data.count / MemoryLayout<Float>.size
         if floatCount % 5 != 0 {
             print("[SongPointCloudLoader] Unexpected float count \(floatCount); expected a multiple of 5.")
-            return (nil, 0)
+            return (nil, 0, .zero, .zero)
         }
 
         let vertexCount = floatCount / 5
         if vertexCount == 0 {
             print("[SongPointCloudLoader] No vertices found in file: \(path)")
-            return (nil, 0)
+            return (nil, 0, .zero, .zero)
         }
 
         var vertices: [PointVertex] = []
         vertices.reserveCapacity(vertexCount)
+        var minPos = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var maxPos = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
 
         data.withUnsafeBytes { rawBuf in
             let buf = rawBuf.bindMemory(to: Float.self)
@@ -97,6 +101,9 @@ struct SongPointCloudLoader {
                 i += 5
 
                 let position = SIMD4<Float>(x, y, z, 1.0)
+                let pos3 = SIMD3<Float>(x, y, z)
+                minPos = simd.min(minPos, pos3)
+                maxPos = simd.max(maxPos, pos3)
                 vertices.append(PointVertex(position: position, scalar: scalar, hpRatio: hp))
             }
         }
@@ -107,10 +114,10 @@ struct SongPointCloudLoader {
             options: []
         ) else {
             print("[SongPointCloudLoader] Failed to create MTLBuffer.")
-            return (nil, 0)
+            return (nil, 0, .zero, .zero)
         }
 
-        return (buffer, vertices.count)
+        return (buffer, vertices.count, minPos, maxPos)
     }
 }
 
@@ -168,7 +175,6 @@ class Renderer: NSObject, MTKViewDelegate {
     private var meshVertexCount: Int = 0
     private var volumeGridDirty = true
     private let voxelResolution = SIMD3<UInt32>(64, 64, 64)
-    private let gridOrigin = SIMD3<Float>(-1.0, -1.0, -1.0)
     private let maxMeshVertices: Int = 600_000
 
     private var voxelCellCount: Int {
@@ -219,7 +225,11 @@ class Renderer: NSObject, MTKViewDelegate {
         let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
         if let buffer = result.buffer, result.count > 0 {
             let name = URL(fileURLWithPath: path).lastPathComponent
-            self.songPointCloud = PointCloudResource(buffer: buffer, count: result.count, name: name)
+            self.songPointCloud = PointCloudResource(buffer: buffer,
+                                                     count: result.count,
+                                                     name: name,
+                                                     boundsMin: result.boundsMin,
+                                                     boundsMax: result.boundsMax)
             refreshActivePointCloud()
             print("[Renderer] Loaded point cloud from: \(path) (vertices: \(result.count))")
             return true
@@ -235,7 +245,11 @@ class Renderer: NSObject, MTKViewDelegate {
         let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
         if let buffer = result.buffer, result.count > 0 {
             let name = URL(fileURLWithPath: path).lastPathComponent
-            self.trendPointCloud = PointCloudResource(buffer: buffer, count: result.count, name: name)
+            self.trendPointCloud = PointCloudResource(buffer: buffer,
+                                                      count: result.count,
+                                                      name: name,
+                                                      boundsMin: result.boundsMin,
+                                                      boundsMax: result.boundsMax)
             refreshActivePointCloud()
             print("[Renderer] Loaded trend point cloud from: \(path) (vertices: \(result.count))")
             return true
@@ -251,7 +265,11 @@ class Renderer: NSObject, MTKViewDelegate {
         let result = SongPointCloudLoader.loadPointCloud(device: device, from: path)
         if let buffer = result.buffer, result.count > 0 {
             let name = URL(fileURLWithPath: path).lastPathComponent
-            self.timelinePointCloud = PointCloudResource(buffer: buffer, count: result.count, name: name)
+            self.timelinePointCloud = PointCloudResource(buffer: buffer,
+                                                         count: result.count,
+                                                         name: name,
+                                                         boundsMin: result.boundsMin,
+                                                         boundsMax: result.boundsMax)
             refreshActivePointCloud()
             print("[Renderer] Loaded timeline point cloud from: \(path) (vertices: \(result.count))")
             return true
@@ -361,10 +379,15 @@ class Renderer: NSObject, MTKViewDelegate {
             SIMD3<Float>( 0.4,  0.4,  0.4)
         ]
 
+        var minPos = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var maxPos = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+
         for (i, pos) in positions.enumerated() {
             let scalar: Float = 1.0
             // Alternate hpRatio to give a small variation in fallback colors
             let hp: Float = (i % 2 == 0) ? 0.25 : 0.75
+            minPos = simd.min(minPos, pos)
+            maxPos = simd.max(maxPos, pos)
             verts.append(PointVertex(position: SIMD4<Float>(pos, 1.0), scalar: scalar, hpRatio: hp))
         }
 
@@ -376,7 +399,9 @@ class Renderer: NSObject, MTKViewDelegate {
             songPointCloud = PointCloudResource(
                 buffer: buffer,
                 count: verts.count,
-                name: "Procedural demo cloud"
+                name: "Procedural demo cloud",
+                boundsMin: minPos,
+                boundsMax: maxPos
             )
         } else {
             songPointCloud = nil
@@ -487,13 +512,22 @@ class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
-    private func makeGridInfo(pointCount: Int) -> VoxelGridInfo {
-        let spacing = 2.0 / Float(max(voxelResolution.x - 1, 1))
+    private func makeGridInfo(for pointCloud: PointCloudResource) -> VoxelGridInfo {
+        let minBounds = pointCloud.boundsMin
+        let maxBounds = pointCloud.boundsMax
+        let center = (minBounds + maxBounds) * 0.5
+        let extent = maxBounds - minBounds
+        let maxExtent = max(extent.x, max(extent.y, extent.z))
+        let paddedExtent = max(maxExtent, 1e-3) * 1.02  // slight pad to avoid clipping at edges
+        let halfExtent = paddedExtent * 0.5
+        let origin = center - SIMD3<Float>(repeating: halfExtent)
+        let maxSteps = max(voxelResolution.x, max(voxelResolution.y, voxelResolution.z))
+        let spacing = paddedExtent / Float(max(Int(maxSteps) - 1, 1))
         return VoxelGridInfo(
             resolution: voxelResolution,
-            origin: gridOrigin,
+            origin: origin,
             spacing: spacing,
-            pointCount: UInt32(min(pointCount, Int(UInt32.max)))
+            pointCount: UInt32(min(pointCloud.count, Int(UInt32.max)))
         )
     }
 
@@ -643,7 +677,7 @@ class Renderer: NSObject, MTKViewDelegate {
             volumeGridDirty = false
             return
         }
-        var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+        var gridInfo = makeGridInfo(for: pointCloud)
         _ = prepareScalarGrid(pointCloud: pointCloud,
                               gridInfo: &gridInfo,
                               buffers: buffers,
@@ -674,7 +708,7 @@ class Renderer: NSObject, MTKViewDelegate {
             return
         }
 
-        var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+        var gridInfo = makeGridInfo(for: pointCloud)
         var isoParams = makeIsoParams()
 
         guard prepareScalarGrid(pointCloud: pointCloud,
@@ -848,7 +882,7 @@ class Renderer: NSObject, MTKViewDelegate {
         case .volume:
             guard let scalarGrid = scalarGridBuffer else { break }
             encoder.setRenderPipelineState(volumePipelineState)
-            var gridInfo = makeGridInfo(pointCount: pointCloud.count)
+            var gridInfo = makeGridInfo(for: pointCloud)
             encoder.setFragmentBytes(&gridInfo, length: MemoryLayout<VoxelGridInfo>.stride, index: 2)
             encoder.setFragmentBuffer(scalarGrid, offset: 0, index: 3)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
