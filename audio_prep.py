@@ -60,7 +60,11 @@ definitions are updated.
 
 from pathlib import Path
 import numpy as np
-import librosa
+
+try:  # librosa is only required for feature extraction, not for timeline stitching.
+    import librosa
+except ImportError:  # pragma: no cover - optional dependency for offline runs
+    librosa = None
 
 
 def aggregateTrendFeatures(decadePath: str) -> None:
@@ -248,6 +252,9 @@ def getSongFeatures(songPath: str) -> dict:
     dynamic_range_db : float
         Dynamic range of non A-weighted loudness (95th - 5th percentile).
     """
+    if librosa is None:
+        raise ImportError("librosa is required for getSongFeatures; please install it.")
+
     song_path = Path(songPath)
 
     # ------------------------------------------------------------------
@@ -390,6 +397,9 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
     * All normalizations (for amplitude and loudness) are performed over
       the remaining, non-silent points.
     """
+    if librosa is None:
+        raise ImportError("librosa is required for exportSongPointCloud; please install it.")
+
     required_keys = ("magnitude", "hp_ratio", "sample_rate", "n_fft")
     if not all(k in features for k in required_keys):
         print(
@@ -521,6 +531,216 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
     )
 
 
+def buildTimelinePointCloud(
+    processedRoot: str | Path = "data/processed",
+    outPath: str | Path | None = None,
+    maxFramesPerSong: int = 400,
+    songTimeScale: float = 1.0,
+    baseGap: float = 0.25,
+    yearGapScale: float = 0.05,
+) -> None:
+    """Construct a single point cloud that stitches all songs chronologically.
+
+    Each point encodes a time sample from a song with the layout::
+
+        [x, y, z, scalar, hp_ratio]
+
+    Axis meanings for the stitched timeline:
+        * x: in-song time scaled by ``songTimeScale`` plus a translation that
+             accumulates with year gaps so songs appear in chronological order.
+        * y: normalized amplitude (RMS) mapped to [-1, 1].
+        * z: normalized per-song dynamic range mapped to [-1, 1].
+        * scalar: normalized A-weighted loudness, used by the renderer for
+                  alpha/intensity.
+        * hp_ratio: normalized release year in [0, 1] to give a color ramp
+                    across the timeline.
+
+    Parameters
+    ----------
+    processedRoot : str | Path
+        Root directory containing ``*_songs`` folders with ``*_features.npz``.
+    outPath : str | Path | None
+        Destination for the stitched binary. Defaults to
+        ``<processedRoot>/timeline_points.bin``.
+    maxFramesPerSong : int
+        Downsamples each song to at most this many frames to keep memory usage
+        reasonable.
+    songTimeScale : float
+        Multiplier applied to normalized song time. Reduce to shrink the total
+        X-span; increase to stretch.
+    baseGap : float
+        Fixed gap between consecutive songs along X.
+    yearGapScale : float
+        Additional gap per year difference between consecutive songs.
+    """
+    root = Path(processedRoot)
+    if outPath is None:
+        outPath = root / "timeline_points.bin"
+    else:
+        outPath = Path(outPath)
+
+    song_feature_paths: list[Path] = []
+    for decade_dir in sorted(root.glob("*_songs")):
+        if decade_dir.is_dir():
+            song_feature_paths.extend(sorted(decade_dir.glob("*_features.npz")))
+
+    if not song_feature_paths:
+        print(f"[buildTimelinePointCloud] No feature files found under {root}")
+        return
+
+    songs: list[dict] = []
+    for feat_path in song_feature_paths:
+        # Extract a 4-digit year prefix from the filename.
+        year = None
+        stem = feat_path.name
+        if len(stem) >= 4 and stem[:4].isdigit():
+            year = int(stem[:4])
+        if year is None:
+            print(f"[buildTimelinePointCloud] Skipping (no year prefix): {feat_path}")
+            continue
+
+        try:
+            with np.load(feat_path) as data:
+                if (
+                    "rms" not in data
+                    or "dynamic_range_db" not in data
+                    or "hop_length" not in data
+                    or "sample_rate" not in data
+                ):
+                    print(
+                        f"[buildTimelinePointCloud] Missing required fields in {feat_path.name};"
+                        " expected rms, dynamic_range_db, hop_length, sample_rate."
+                    )
+                    continue
+                rms = np.asarray(data["rms"], dtype=np.float32)
+                loud_A = (
+                    np.asarray(data["loudness_A_db"], dtype=np.float32)
+                    if "loudness_A_db" in data
+                    else None
+                )
+                hop_length = int(data["hop_length"])
+                sample_rate = int(data["sample_rate"])
+                dynamic_range = float(data["dynamic_range_db"])
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"[buildTimelinePointCloud] Error reading {feat_path.name}: {exc}")
+            continue
+
+        if rms.size == 0:
+            continue
+
+        frames = rms.shape[0]
+        duration_sec = float(frames * hop_length) / max(sample_rate, 1)
+        time_sec = np.arange(frames, dtype=np.float32) * (hop_length / float(sample_rate))
+
+        songs.append(
+            {
+                "name": feat_path.name,
+                "year": year,
+                "rms": rms,
+                "loud_array": loud_A
+                if loud_A is not None
+                else (20.0 * np.log10(np.maximum(rms, 1e-10))),
+                "hop_length": hop_length,
+                "sample_rate": sample_rate,
+                "dynamic_range": dynamic_range,
+                "duration_sec": duration_sec,
+                "time_sec": time_sec,
+            }
+        )
+
+    if not songs:
+        print("[buildTimelinePointCloud] No songs with usable features.")
+        return
+
+    # Global ranges for normalization.
+    min_rms = min(float(np.min(s["rms"])) for s in songs)
+    max_rms = max(float(np.max(s["rms"])) for s in songs)
+    min_dyn = min(s["dynamic_range"] for s in songs)
+    max_dyn = max(s["dynamic_range"] for s in songs)
+    min_year = min(s["year"] for s in songs)
+    max_year = max(s["year"] for s in songs)
+
+    # Loudness range uses A-weighted dB if present; otherwise falls back to log RMS.
+    min_loud = min(float(np.min(s["loud_array"])) for s in songs)
+    max_loud = max(float(np.max(s["loud_array"])) for s in songs)
+
+    max_duration = max(s["duration_sec"] for s in songs)
+    duration_scale = songTimeScale / max(max_duration, 1e-6)
+
+    rms_range = max(max_rms - min_rms, 1e-6)
+    loud_range = max(max_loud - min_loud, 1e-6)
+    dyn_range = max(max_dyn - min_dyn, 1e-6)
+    year_range = max(max_year - min_year, 1)
+
+    songs_sorted = sorted(songs, key=lambda s: (s["year"], s["name"]))
+    verts: list[np.ndarray] = []
+
+    offset_x = 0.0
+    prev_year = None
+    prev_span = 0.0
+
+    for song in songs_sorted:
+        year = song["year"]
+        if prev_year is not None:
+            year_gap = max(year - prev_year, 0)
+            offset_x += prev_span + baseGap + year_gap * yearGapScale
+        prev_year = year
+
+        # Downsample frames.
+        frames = song["rms"].shape[0]
+        if frames > maxFramesPerSong:
+            sample_idx = np.linspace(0, frames - 1, maxFramesPerSong, dtype=int)
+        else:
+            sample_idx = np.arange(frames, dtype=int)
+
+        t_scaled = song["time_sec"][sample_idx] * duration_scale
+        span = t_scaled.max() - t_scaled.min() if t_scaled.size > 0 else 0.0
+        prev_span = span
+
+        rms = song["rms"][sample_idx]
+        rms01 = (rms - min_rms) / rms_range
+        amp_ndc = rms01 * 2.0 - 1.0
+
+        loud_arr = song["loud_array"][sample_idx]
+        loud01 = (loud_arr - min_loud) / loud_range
+
+        dyn01 = (song["dynamic_range"] - min_dyn) / dyn_range
+        dyn_ndc = dyn01 * 2.0 - 1.0
+
+        year01 = (year - min_year) / year_range
+
+        x = offset_x + t_scaled
+        y = amp_ndc.astype(np.float32)
+        z = np.full_like(y, np.float32(dyn_ndc))
+        scalar = loud01.astype(np.float32)
+        hp = np.full_like(y, np.float32(year01))
+
+        verts.append(
+            np.stack(
+                [
+                    x.astype(np.float32),
+                    y,
+                    z,
+                    scalar,
+                    hp,
+                ],
+                axis=1,
+            )
+        )
+
+    if not verts:
+        print("[buildTimelinePointCloud] No vertices generated.")
+        return
+
+    stitched = np.concatenate(verts, axis=0)
+    outPath.parent.mkdir(parents=True, exist_ok=True)
+    stitched.astype(np.float32).tofile(outPath)
+    print(
+        f"[buildTimelinePointCloud] Wrote timeline cloud: {outPath} "
+        f"(songs: {len(songs_sorted)}, vertices: {stitched.shape[0]})"
+    )
+
+
 def extractSongFeatures() -> None:
     """Walk ``./data/music`` and extract per-song features.
 
@@ -613,6 +833,9 @@ def extractSongFeatures() -> None:
 
         # After processing all songs for this decade, aggregate trend features.
         aggregateTrendFeatures(str(decade_out_dir))
+
+    # Build a stitched all-songs timeline once per full extraction run.
+    buildTimelinePointCloud(processedRoot=processed_root)
 
 
 def main() -> None:

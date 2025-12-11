@@ -57,7 +57,7 @@ class PointCloudControlBar: NSView {
     }()
     private lazy var modeControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
-            labels: ["Song", "Trend"],
+            labels: ["Song", "Trend", "Timeline"],
             trackingMode: .selectOne,
             target: self,
             action: #selector(modeChanged(_:))
@@ -137,12 +137,20 @@ class PointCloudControlBar: NSView {
     }
 
     func updateSelectedFileName(_ name: String?) {
-        let modeText = (renderer?.currentMode == .trend) ? "Trend" : "Song"
+        let modeText: String
+        switch renderer?.currentMode {
+        case .some(.trend):
+            modeText = "Trend"
+        case .some(.timeline):
+            modeText = "Timeline"
+        default:
+            modeText = "Song"
+        }
         statusLabel.stringValue = "\(modeText): \(name ?? "No point cloud loaded")"
     }
 
     func setMode(_ mode: RenderMode) {
-        modeControl.selectedSegment = (mode == .song) ? 0 : 1
+        modeControl.selectedSegment = segmentIndex(for: mode)
         refreshStatusLabel()
     }
 
@@ -178,11 +186,11 @@ class PointCloudControlBar: NSView {
     }
 
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
-        let selectedMode: RenderMode = sender.selectedSegment == 0 ? .song : .trend
+        guard let selectedMode = renderMode(for: sender.selectedSegment) else { return }
         guard renderer?.setMode(selectedMode) == true else {
             NSSound.beep()
             // Revert UI selection if mode change failed
-            sender.selectedSegment = (renderer?.currentMode == .song) ? 0 : 1
+            sender.selectedSegment = segmentIndex(for: renderer?.currentMode ?? .song)
             return
         }
         refreshStatusLabel()
@@ -220,6 +228,23 @@ class PointCloudControlBar: NSView {
         case .pointCloud: return 0
         case .mesh: return 1
         case .volume: return 2
+        }
+    }
+
+    private func segmentIndex(for mode: RenderMode) -> Int {
+        switch mode {
+        case .song: return 0
+        case .trend: return 1
+        case .timeline: return 2
+        }
+    }
+
+    private func renderMode(for segment: Int) -> RenderMode? {
+        switch segment {
+        case 0: return .song
+        case 1: return .trend
+        case 2: return .timeline
+        default: return nil
         }
     }
 
