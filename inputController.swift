@@ -6,6 +6,7 @@ class InputController {
 
     private weak var view: MTKView?
     private var camera: Camera
+    private weak var renderer: Renderer?
 
     private var keyboardHandler: Any?
     private var mouseHandler: Any?
@@ -19,9 +20,10 @@ class InputController {
     private var isDragging: Bool = false
     private var pressedKeys = Set<String>()
 
-    init(view: MTKView, camera: Camera, moveSpeed: Float = 2.0, rotationSpeed: Float = 0.005) {
+    init(view: MTKView, camera: Camera, renderer: Renderer?, moveSpeed: Float = 2.0, rotationSpeed: Float = 0.005) {
         self.view = view
         self.camera = camera
+        self.renderer = renderer
         self.moveSpeed = moveSpeed
         self.rotationSpeed = rotationSpeed
         setupInputHandlers()
@@ -110,6 +112,15 @@ class InputController {
         guard let chars = event.charactersIgnoringModifiers?.lowercased(),
               let ch = chars.first else { return }
         let key = String(ch)
+
+        if key == "r" {
+            if renderer?.currentMode == .timeline {
+                renderer?.centerCameraOnActiveData()
+            } else {
+                camera.reset()
+            }
+            return
+        }
 
         pressedKeys.insert(key)
         updateMoveDirectionFromKeys()

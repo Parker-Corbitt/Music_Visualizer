@@ -21,4 +21,9 @@ class Camera {
                              nearZ: nearZ,
                              farZ: farZ)
     }
+
+    func reset() {
+        position = SIMD3<Float>(0, 2, 5)
+        rotation = SIMD3<Float>(0, 0, 0)
+    }
 }

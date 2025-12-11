@@ -277,6 +277,9 @@ class Renderer: NSObject, MTKViewDelegate {
         ensurePointCloudLoaded(for: mode)
         refreshActivePointCloud()
         invalidateDerivedSurfaces()
+        if mode == .timeline {
+            centerCameraOnActiveData()
+        }
         return activePointCloud != nil && activePointCloud!.count > 0
     }
 
@@ -525,6 +528,30 @@ class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
+    /// Position the camera to frame the active point cloud (used for timeline reset).
+    func centerCameraOnActiveData() {
+        guard let pc = activePointCloud else { return }
+        let center = (pc.boundsMin + pc.boundsMax) * 0.5
+        let extent = pc.boundsMax - pc.boundsMin
+        let padding: Float = 0.05
+        let halfExt = (extent * (1.0 + padding)) * 0.5
+        let fovRad = camera.fovDegrees.radians
+        let halfFovTan = tan(fovRad * 0.5)
+        let aspect = max(camera.aspectRatio, 0.1)
+
+        let distanceFitY = halfExt.y / max(halfFovTan, 1e-4)
+        let distanceFitX = halfExt.x / max(halfFovTan * aspect, 1e-4)
+        let distance = max(distanceFitX, distanceFitY) * 1.05
+
+        // Raise slightly above center so we look down and keep Z in view.
+        let pos = center + SIMD3<Float>(0, halfExt.y * 0.4, distance + halfExt.z)
+        camera.position = pos
+        let dir = simd_normalize(center - pos)
+        let yaw = atan2(dir.x, -dir.z)
+        let pitch = asin(dir.y)
+        camera.rotation = SIMD3<Float>(pitch, yaw, 0)
+    }
+
     private func makeIsoParams() -> IsoSurfaceParams {
         IsoSurfaceParams(
             isoValue: isovalue,
@@ -751,7 +778,7 @@ class Renderer: NSObject, MTKViewDelegate {
         view.depthStencilPixelFormat = .depth32Float
         view.clearColor = MTLClearColor(red: 0.2, green: 0.2, blue: 0.25, alpha: 1.0)
         createPipelines(view: view)
-        inputController = InputController(view: view, camera: camera)
+        inputController = InputController(view: view, camera: camera, renderer: self)
     }
 
     private func createPipelines(view: MTKView) {

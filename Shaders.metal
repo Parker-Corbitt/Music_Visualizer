@@ -102,7 +102,8 @@ vertex MeshVOut mesh_vertex_main(const device MeshVertex *vertices [[buffer(0)]]
     MeshVOut out;
     float4 worldPos = uniforms.modelMatrix * vertices[vid].position;
     out.position = uniforms.viewProjectionMatrix * worldPos;
-    out.normal = (uniforms.modelMatrix * float4(vertices[vid].normal, 0.0)).xyz;
+    float3 worldNormal = (uniforms.modelMatrix * float4(vertices[vid].normal, 0.0)).xyz;
+    out.normal = normalize(worldNormal);
     out.colorScalar = vertices[vid].colorScalar;
     return out;
 }
@@ -443,7 +444,7 @@ kernel void dualContourCells(const device float *scalarGrid [[buffer(0)]],
     // Store the dual vertex for this cell
     cellMask[gid] = 1u;
     float3 pos = accum / float(intersections);
-    float3 normal = estimateCellNormal(values);
+    float3 normal = -estimateCellNormal(values); // flip to align lighting consistently for dual contouring
     float hpSum = 0.0;
     for (uint i = 0; i < 8; ++i) {
         hpSum += hpGrid[cornerIdx[i]];
