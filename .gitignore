@@ -6,4 +6,8 @@ default.metallib
 .DS_Store
 __pycache__/
 .cache/
-.build-cache/
+.build_cache/
+report/main.aux
+report/main.log
+report/main.out
+report/main.synctex.gz
