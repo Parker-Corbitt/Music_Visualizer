@@ -209,9 +209,9 @@ kernel void normalizeGrid(const device atomic_uint *loudnessAccum [[buffer(0)]],
 constant ushort4 tetrahedra[6] = {
     ushort4(0, 5, 1, 6),
     ushort4(0, 1, 2, 6),
-    ushort4(0, 2, 3, 6),
-    ushort4(0, 3, 7, 6),
-    ushort4(0, 7, 4, 6),
+    ushort4(0, 2, 6, 3), // keep consistent winding (all positive volume)
+    ushort4(0, 3, 6, 7),
+    ushort4(0, 7, 6, 4),
     ushort4(0, 4, 5, 6)
 };
 

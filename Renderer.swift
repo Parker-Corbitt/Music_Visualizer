@@ -187,7 +187,7 @@ class Renderer: NSObject, MTKViewDelegate {
     private let songVoxelResolution = SIMD3<UInt32>(128, 128, 128)
     private let timelineVoxelResolution = SIMD3<UInt32>(224, 224, 224)
     private var voxelResolution = SIMD3<UInt32>(128, 128, 128)
-    private let maxMeshVertices: Int = 1_200_000
+    private let maxMeshVertices: Int = 12_000_000
 
     private var voxelCellCount: Int {
         Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)

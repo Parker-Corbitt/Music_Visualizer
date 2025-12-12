@@ -534,7 +534,7 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
 def buildTimelinePointCloud(
     processedRoot: str | Path = "data/processed",
     outPath: str | Path | None = None,
-    maxFramesPerSong: int = 50000,
+    maxFramesPerSong: int = 100000,
     songTimeScale: float = 0.8,
     baseGap: float = 0.02,
     yearGapScale: float = 0.005,

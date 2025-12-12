@@ -64,6 +64,23 @@ class PointCloudControlBar: NSView {
         slider.translatesAutoresizingMaskIntoConstraints = false
         return slider
     }()
+    private lazy var densityField: NSTextField = {
+        let field = NSTextField(string: "1.00")
+        field.alignment = .right
+        field.controlSize = .small
+        field.isEnabled = false
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        if let cell = field.cell as? NSTextFieldCell {
+            cell.sendsActionOnEndEditing = true
+        }
+        field.target = self
+        field.action = #selector(densityFieldChanged(_:))
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 50).isActive = true
+        return field
+    }()
     private lazy var opacitySlider: NSSlider = {
         let slider = NSSlider(value: 1.0, minValue: 0.05, maxValue: 1.5, target: self, action: #selector(opacityChanged(_:)))
         slider.isContinuous = true
@@ -73,9 +90,26 @@ class PointCloudControlBar: NSView {
         slider.translatesAutoresizingMaskIntoConstraints = false
         return slider
     }()
-    private let densityLabel = NSTextField(labelWithString: "Density: 1.0")
-    private let opacityLabel = NSTextField(labelWithString: "Opacity: 1.0")
-    private let isovalueLabel = NSTextField(labelWithString: "Isovalue: 0.50")
+    private lazy var opacityField: NSTextField = {
+        let field = NSTextField(string: "1.00")
+        field.alignment = .right
+        field.controlSize = .small
+        field.isEnabled = false
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        if let cell = field.cell as? NSTextFieldCell {
+            cell.sendsActionOnEndEditing = true
+        }
+        field.target = self
+        field.action = #selector(opacityFieldChanged(_:))
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 50).isActive = true
+        return field
+    }()
+    private let densityLabel = NSTextField(labelWithString: "Density:")
+    private let opacityLabel = NSTextField(labelWithString: "Opacity:")
+    private let isovalueLabel = NSTextField(labelWithString: "Isovalue:")
     private lazy var isovalueSlider: NSSlider = {
         let slider = NSSlider(value: 0.5, minValue: 0.0, maxValue: 1.0, target: self, action: #selector(isovalueChanged(_:)))
         slider.isContinuous = true
@@ -87,6 +121,23 @@ class PointCloudControlBar: NSView {
         slider.numberOfTickMarks = 0
         slider.translatesAutoresizingMaskIntoConstraints = false
         return slider
+    }()
+    private lazy var isovalueField: NSTextField = {
+        let field = NSTextField(string: "0.50")
+        field.alignment = .right
+        field.controlSize = .small
+        field.isEnabled = false
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        if let cell = field.cell as? NSTextFieldCell {
+            cell.sendsActionOnEndEditing = true
+        }
+        field.target = self
+        field.action = #selector(isovalueFieldChanged(_:))
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 50).isActive = true
+        return field
     }()
     private lazy var modeControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
@@ -147,22 +198,23 @@ class PointCloudControlBar: NSView {
             transferControl,
             densityLabel,
             densitySlider,
+            densityField,
             opacityLabel,
             opacitySlider,
+            opacityField,
             meshAlgorithmControl,
             lightingButton,
             isovalueLabel,
             isovalueSlider,
-            statusLabel,
-            NSView(),
-            cameraLabel
+            isovalueField,
+            statusLabel
         ])
         mainRow.translatesAutoresizingMaskIntoConstraints = false
         mainRow.orientation = .horizontal
         mainRow.alignment = .centerY
         mainRow.spacing = 10
 
-        let debugRow = NSStackView(views: [debugLabel, NSView()])
+        let debugRow = NSStackView(views: [debugLabel, cameraLabel])
         debugRow.translatesAutoresizingMaskIntoConstraints = false
         debugRow.orientation = .horizontal
         debugRow.alignment = .centerY
@@ -297,30 +349,66 @@ class PointCloudControlBar: NSView {
         let value = Float(sender.doubleValue)
         renderer?.setDensityScale(value)
         updateDensityLabel(value)
+        densityField.stringValue = String(format: "%.2f", value)
     }
 
     @objc private func opacityChanged(_ sender: NSSlider) {
         let value = Float(sender.doubleValue)
         renderer?.setOpacityScale(value)
         updateOpacityLabel(value)
+        opacityField.stringValue = String(format: "%.2f", value)
     }
 
     @objc private func isovalueChanged(_ sender: NSSlider) {
         let value = Float(sender.doubleValue)
         renderer?.isovalue = value
         updateIsovalueLabel(value)
+        isovalueField.stringValue = String(format: "%.2f", value)
     }
 
     private func updateIsovalueLabel(_ value: Float) {
-        isovalueLabel.stringValue = String(format: "Isovalue: %.2f", value)
+        isovalueLabel.stringValue = "Isovalue:"
+        isovalueField.stringValue = String(format: "%.2f", value)
     }
 
     private func updateDensityLabel(_ value: Float) {
-        densityLabel.stringValue = String(format: "Density: %.2f", value)
+        densityLabel.stringValue = "Density:"
+        densityField.stringValue = String(format: "%.2f", value)
     }
 
     private func updateOpacityLabel(_ value: Float) {
-        opacityLabel.stringValue = String(format: "Opacity: %.2f", value)
+        opacityLabel.stringValue = "Opacity:"
+        opacityField.stringValue = String(format: "%.2f", value)
+    }
+
+    @objc private func densityFieldChanged(_ sender: NSTextField) {
+        let value = Float(sender.stringValue) ?? Float(densitySlider.doubleValue)
+        let clamped = max(0.1, min(3.0, value))
+        renderer?.setDensityScale(clamped)
+        densitySlider.doubleValue = Double(clamped)
+        updateDensityLabel(clamped)
+        sender.stringValue = String(format: "%.2f", clamped)
+        endEditing(sender)
+    }
+
+    @objc private func opacityFieldChanged(_ sender: NSTextField) {
+        let value = Float(sender.stringValue) ?? Float(opacitySlider.doubleValue)
+        let clamped = max(0.05, min(1.5, value))
+        renderer?.setOpacityScale(clamped)
+        opacitySlider.doubleValue = Double(clamped)
+        updateOpacityLabel(clamped)
+        sender.stringValue = String(format: "%.2f", clamped)
+        endEditing(sender)
+    }
+
+    @objc private func isovalueFieldChanged(_ sender: NSTextField) {
+        let value = Float(sender.stringValue) ?? renderer?.isovalue ?? 0.5
+        let clamped = max(0.0, min(1.0, value))
+        renderer?.isovalue = clamped
+        isovalueSlider.doubleValue = Double(clamped)
+        updateIsovalueLabel(clamped)
+        sender.stringValue = String(format: "%.2f", clamped)
+        endEditing(sender)
     }
 
     private func segmentIndex(for mode: SurfaceRenderMode) -> Int {
@@ -382,9 +470,11 @@ class PointCloudControlBar: NSView {
 
         isovalueLabel.isHidden = !meshVisible
         isovalueSlider.isHidden = !meshVisible
+        isovalueField.isHidden = !meshVisible
         meshAlgorithmControl.isHidden = !meshVisible
         lightingButton.isHidden = !meshVisible
         isovalueSlider.isEnabled = meshVisible
+        isovalueField.isEnabled = meshVisible
         meshAlgorithmControl.isEnabled = meshVisible
         lightingButton.isEnabled = meshVisible
 
@@ -393,9 +483,17 @@ class PointCloudControlBar: NSView {
         densitySlider.isHidden = !volumeVisible
         opacityLabel.isHidden = !volumeVisible
         opacitySlider.isHidden = !volumeVisible
+        densityField.isHidden = !volumeVisible
+        opacityField.isHidden = !volumeVisible
         transferControl.isEnabled = volumeVisible
         densitySlider.isEnabled = volumeVisible
         opacitySlider.isEnabled = volumeVisible
+        densityField.isEnabled = volumeVisible
+        opacityField.isEnabled = volumeVisible
+    }
+
+    private func endEditing(_ field: NSTextField) {
+        field.window?.makeFirstResponder(nil)
     }
 }
 

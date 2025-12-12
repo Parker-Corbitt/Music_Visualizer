@@ -93,8 +93,21 @@ Several parameter sweeps were performed to understand how rendering choices affe
 \section{Results}
 \begin{itemize}[leftmargin=1.25em]
     \item Qualitative visuals: song vs. timeline; dual contour vs. marching tetra.
+    
+    In the case of comparing dual contouring and marching tetrahedra for isosurface extraction, dual contouring generally produces smoother surfaces with fewer artifacts. This is because dual contouring generates a single vertex per cell based on the average position of intersections, leading to a more coherent surface representation. In contrast, marching tetrahedra can exhibit more jagged edges due to its discrete case handling, especially in regions with high scalar field variation. It's worth noting that dual contouring produces a more consistent low amplitude region, while marching tetrahedra doesn't create the same region for the same range of isovalues. This behavior is exhibited below. 
+
     \item Observations about dynamics/crest factor over years.
+    
+    
+
     \item Observations about ray-marched volume structures.
+
+    In song mode, isosurfaces at low to moderate loudness levels tend to form branching structures that reflect the temporal evolution of dynamics across frequencies within the track. Higher isovalues isolate peak loudness events, often resulting in smaller, disconnected surface components that highlight moments of intensity. Dual contouring generally produces smoother surfaces with fewer artifacts compared to marching tetrahedra, which can exhibit more jagged edges due to its discrete case handling.
+
+    In timeline mode, the aggregated point cloud reveals long-term trends in harmonic and percussive content across decades. The visualizations show how these characteristics evolve over time, with some decades exhibiting more pronounced harmonic structures and others more percussive ones.
+
+    Volume renderings effectively capture the overall loudness distribution, with different transfer functions emphasizing various aspects of the data. The Classic transfer function highlights mid-range loudness levels, while Ember and Glacial accentuate high and low extremes, respectively. Adjusting density and opacity scales allows for fine-tuning the visibility of internal structures versus broader envelopes, providing insights into the persistence and dominance of certain loudness behaviors over time.
+
 \end{itemize}
 
 \section{Discussion}
@@ -102,9 +115,11 @@ Several parameter sweeps were performed to understand how rendering choices affe
     \item Interpretation: what the shapes/colors imply about energy variation.
     \item Limitations: data coverage, hp as hue, crest factor assumptions, grid resolution costs.
     \item Ablations or failure cases (e.g., sparse regions, banding).
+
+    A problem with the generated point cloud data in this experiment are the regions where the log amplitude is very low, which is most obvious for lower frequency bins. These low frequency regions exhibit a sharp "cliff" in the log amplitude values, creating a sort of gap in the resulting isosurfaces and volume renderings. This is likely due to the noise floor of the audio signal, where very low amplitude values are dominated by noise rather than meaningful signal content. As a result, these low-amplitude low-frequency regions have an observable discontinuity in the generated surfaces and volumes. These regions should only be considered "meaningful" if they have variation in amplitude, which signifies the presence of a strong low frequency signal rather than just noise, and thus creating an isosurface with obvious variation. 
 \end{itemize}
 
-\section{Conclusion}
+/section{Conclusion}
 \begin{itemize}[leftmargin=1.25em]
     \item Recap insights and what the timeline vs. song views reveal.
 \end{itemize}

@@ -66,6 +66,7 @@ class InputController {
         // Keyboard
         keyboardHandler = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] ev in
             guard let self = self else { return ev }
+            if self.isEditingText(in: ev.window) { return ev }
             switch ev.type {
             case .keyDown:
                 self.handleKeyDown(ev)
@@ -84,6 +85,7 @@ class InputController {
             matching: [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .scrollWheel]
         ) { [weak self] ev in
             guard let self = self else { return ev }
+            if self.isEditingText(in: ev.window, allowingEndEditingWith: ev) { return ev }
             switch ev.type {
             case .leftMouseDown:
                 self.isDragging = true
@@ -154,5 +156,26 @@ class InputController {
         dir.y = down + up
 
         moveDirection = dir
+    }
+
+    private func isEditingText(in window: NSWindow?, allowingEndEditingWith event: NSEvent? = nil) -> Bool {
+        guard let textView = window?.firstResponder as? NSTextView else { return false }
+        guard let event = event else { return true }
+
+        // Let the click end text editing if it landed outside the active text field so
+        // the same click can also start camera interaction.
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged, .scrollWheel:
+            if let editorOwner = textView.delegate as? NSView {
+                let localPoint = editorOwner.convert(event.locationInWindow, from: nil)
+                if editorOwner.bounds.contains(localPoint) {
+                    return true
+                }
+            }
+            window?.makeFirstResponder(nil)
+            return false
+        default:
+            return true
+        }
     }
 }
