@@ -13,6 +13,7 @@ class PointCloudControlBar: NSView {
     private weak var renderer: Renderer?
     private let statusLabel = NSTextField(labelWithString: "No point cloud loaded")
     private let cameraLabel = NSTextField(labelWithString: "Camera: (0, 0, 0)")
+    private let debugLabel = NSTextField(labelWithString: "FPS: --  Voxels: --  Grid: --  Vertices: --")
     private lazy var renderStyleControl: NSSegmentedControl = {
         let control = NSSegmentedControl(
             labels: ["Points", "Mesh", "Volume"],
@@ -113,6 +114,9 @@ class PointCloudControlBar: NSView {
         cameraLabel.lineBreakMode = .byTruncatingTail
         cameraLabel.alignment = .right
         cameraLabel.translatesAutoresizingMaskIntoConstraints = false
+        debugLabel.lineBreakMode = .byTruncatingTail
+        debugLabel.alignment = .right
+        debugLabel.translatesAutoresizingMaskIntoConstraints = false
         isovalueLabel.alignment = .right
         isovalueLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -136,7 +140,7 @@ class PointCloudControlBar: NSView {
         }
         updateControlVisibility(for: renderer.surfaceMode)
 
-        let stack = NSStackView(views: [
+        let mainRow = NSStackView(views: [
             modeControl,
             openButton,
             renderStyleControl,
@@ -153,17 +157,29 @@ class PointCloudControlBar: NSView {
             NSView(),
             cameraLabel
         ])
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 10
-        addSubview(stack)
+        mainRow.translatesAutoresizingMaskIntoConstraints = false
+        mainRow.orientation = .horizontal
+        mainRow.alignment = .centerY
+        mainRow.spacing = 10
+
+        let debugRow = NSStackView(views: [debugLabel, NSView()])
+        debugRow.translatesAutoresizingMaskIntoConstraints = false
+        debugRow.orientation = .horizontal
+        debugRow.alignment = .centerY
+        debugRow.spacing = 10
+
+        let column = NSStackView(views: [mainRow, debugRow])
+        column.orientation = .vertical
+        column.spacing = 6
+        column.alignment = .leading
+        column.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(column)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor),
             statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
             isovalueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
             isovalueSlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
@@ -172,12 +188,14 @@ class PointCloudControlBar: NSView {
             transferControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
             densitySlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
             opacitySlider.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
-            cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
+            cameraLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+            debugLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 260)
         ])
 
         // Periodically refresh the camera position so the UI reflects user movement.
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.refreshCameraLabel()
+            self?.refreshDebugLabel()
         }
     }
 
@@ -208,6 +226,18 @@ class PointCloudControlBar: NSView {
         }
         let text = String(format: "Camera: x=%.2f, y=%.2f, z=%.2f", pos.x, pos.y, pos.z)
         cameraLabel.stringValue = text
+    }
+
+    private func refreshDebugLabel() {
+        guard let stats = renderer?.debugStats() else {
+            debugLabel.stringValue = "FPS: --  Voxels: --  Grid: --  Vertices: --"
+            return
+        }
+        let fpsText = String(format: "%.1f", stats.fps)
+        let voxels = stats.voxelCount
+        let grid = stats.gridResolution
+        let verts = stats.meshVertices
+        debugLabel.stringValue = "FPS: \(fpsText)  Voxels: \(voxels)  Grid: \(grid.x)x\(grid.y)x\(grid.z)  Vertices: \(verts)"
     }
 
     @objc private func openFile(_ sender: Any?) {

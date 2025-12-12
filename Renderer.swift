@@ -193,6 +193,33 @@ class Renderer: NSObject, MTKViewDelegate {
         Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
     }
 
+    func debugStats() -> (fps: Double, voxelCount: Int, gridResolution: SIMD3<UInt32>, meshVertices: Int) {
+        let fps = frameTimer?.fps ?? 0.0
+        return (fps, voxelCellCount, voxelResolution, meshVertexCount)
+    }
+
+    private class FrameTimer {
+        private var lastTime: CFTimeInterval = CACurrentMediaTime()
+        private var accum: Double = 0
+        private var frames: Int = 0
+        var fps: Double = 0
+
+        func tick() {
+            let now = CACurrentMediaTime()
+            let dt = now - lastTime
+            lastTime = now
+            accum += dt
+            frames += 1
+            if accum >= 0.5 {
+                fps = Double(frames) / accum
+                accum = 0
+                frames = 0
+            }
+        }
+    }
+
+    private var frameTimer: FrameTimer? = FrameTimer()
+
     private var voxelCubeCount: Int {
         Int((voxelResolution.x - 1) * (voxelResolution.y - 1) * (voxelResolution.z - 1))
     }
@@ -859,6 +886,7 @@ class Renderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+        frameTimer?.tick()
         inputController.update()
         rebuildMeshIfNeeded()
 
