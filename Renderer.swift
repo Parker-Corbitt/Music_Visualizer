@@ -184,7 +184,9 @@ class Renderer: NSObject, MTKViewDelegate {
     private var dualCellMaskBuffer: MTLBuffer?
     private var meshVertexCount: Int = 0
     private var volumeGridDirty = true
-    private let voxelResolution = SIMD3<UInt32>(128, 128, 128)
+    private let songVoxelResolution = SIMD3<UInt32>(128, 128, 128)
+    private let timelineVoxelResolution = SIMD3<UInt32>(224, 224, 224)
+    private var voxelResolution = SIMD3<UInt32>(128, 128, 128)
     private let maxMeshVertices: Int = 1_200_000
 
     private var voxelCellCount: Int {
@@ -274,6 +276,12 @@ class Renderer: NSObject, MTKViewDelegate {
     @discardableResult
     func setMode(_ mode: RenderMode) -> Bool {
         currentMode = mode
+        let targetRes = (mode == .timeline) ? timelineVoxelResolution : songVoxelResolution
+        if targetRes != voxelResolution {
+            voxelResolution = targetRes
+            volumeGridDirty = true
+            if surfaceMode == .mesh { meshNeedsRebuild = true }
+        }
         ensurePointCloudLoaded(for: mode)
         refreshActivePointCloud()
         invalidateDerivedSurfaces()
