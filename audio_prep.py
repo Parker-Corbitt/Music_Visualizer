@@ -449,10 +449,6 @@ def exportSongPointCloud(features: dict, outPath: str) -> None:
     # ------------------------------------------------------------------
     amp_eps = 1e-10
     amp_log = 20.0 * np.log10(amp + amp_eps)  # typically negative values
-    # Floor extremely quiet bins to avoid a hard clamp after normalization.
-    # Using a low percentile prevents a single near-zero bin from setting the global min.
-    amp_floor = np.percentile(amp_log, 5.0)
-    amp_log = np.maximum(amp_log, amp_floor)
 
     # ------------------------------------------------------------------
     # 3. Compute per-bin A-weighted loudness as the scalar field.

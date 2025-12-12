@@ -88,7 +88,7 @@ For mesh rendering, voxelization also accumulates harmonic–percussive statisti
 
 To evaluate the behavior of the system and the expressiveness of the visualizations, a series of qualitative experiments were conducted on a small corpus of commercially released tracks spanning multiple decades. The dataset includes songs taken from the billboard top year end track list, from the beginning of the 1970s to the end of the 2010s. For each track, a per‑song point cloud is generated and visualized in Song Mode, and all tracks are also aggregated into a single timeline point cloud for Timeline Mode.
 
-Several parameter sweeps were performed to understand how rendering choices affect the resulting images. In mesh mode, the isovalue was varied across the full \([0,1]\) range to explore how constant‑loudness surfaces emerge, merge, and disappear. Side‑by‑side comparisons of marching tetrahedra and dual contouring highlight their differing behavior on the same scalar field: marching tetrahedra tends to produce smoother, more blobby surfaces, while dual contouring preserves sharper features and cell‑scale detail. In volume mode, the Classic, Ember, and Glacial transfer functions were compared under different density and opacity scales to see which settings best reveal internal structure versus large‑scale envelopes.
+Several parameter sweeps were performed to understand how rendering choices affect the resulting images. In mesh mode, the isovalue was varied across the full \([0,1]\) range to explore how constant‑loudness surfaces emerge, merge, and disappear. Side‑by‑side comparisons of marching tetrahedra and dual contouring highlight their differing behavior on the same scalar field.. In volume mode, the Classic, Ember, and Glacial transfer functions were compared under different density and opacity scales to see which settings best reveal internal structure versus large‑scale envelopes.
 
 \section{Results}
 \begin{itemize}[leftmargin=1.25em]
@@ -102,13 +102,6 @@ Several parameter sweeps were performed to understand how rendering choices affe
     \item Interpretation: what the shapes/colors imply about energy variation.
     \item Limitations: data coverage, hp as hue, crest factor assumptions, grid resolution costs.
     \item Ablations or failure cases (e.g., sparse regions, banding).
-\end{itemize}
-
-\section{Future Work}
-\begin{itemize}[leftmargin=1.25em]
-    \item Alternative color encodings (hp in volume, multi-field transfer functions).
-    \item Better temporal alignment or interactive filtering per decade/song.
-    \item Optimizations (compute ray marcher, adaptive grids).
 \end{itemize}
 
 \section{Conclusion}
