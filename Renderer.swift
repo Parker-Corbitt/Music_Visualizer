@@ -183,6 +183,8 @@ class Renderer: NSObject, MTKViewDelegate {
     private var dualCellVertexBuffer: MTLBuffer?
     private var dualCellMaskBuffer: MTLBuffer?
     private var meshVertexCount: Int = 0
+    private var lastMeshBuildMS: Double = 0
+    private var lastVolumeBuildMS: Double = 0
     private var volumeGridDirty = true
     private let songVoxelResolution = SIMD3<UInt32>(128, 128, 128)
     private let timelineVoxelResolution = SIMD3<UInt32>(224, 224, 224)
@@ -193,9 +195,9 @@ class Renderer: NSObject, MTKViewDelegate {
         Int(voxelResolution.x * voxelResolution.y * voxelResolution.z)
     }
 
-    func debugStats() -> (fps: Double, voxelCount: Int, gridResolution: SIMD3<UInt32>, meshVertices: Int) {
+    func debugStats() -> (fps: Double, voxelCount: Int, gridResolution: SIMD3<UInt32>, meshVertices: Int, meshMs: Double, volumeMs: Double) {
         let fps = frameTimer?.fps ?? 0.0
-        return (fps, voxelCellCount, voxelResolution, meshVertexCount)
+        return (fps, voxelCellCount, voxelResolution, meshVertexCount, lastMeshBuildMS, lastVolumeBuildMS)
     }
 
     private class FrameTimer {
@@ -727,19 +729,23 @@ class Renderer: NSObject, MTKViewDelegate {
 
     private func rebuildVolumeGridIfNeeded() {
         guard volumeGridDirty, let pointCloud = activePointCloud, pointCloud.count > 0 else { return }
+        let t0 = CACurrentMediaTime()
         ensureVoxelResources(pointCount: pointCloud.count)
         guard let buffers = meshBuffers(),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
             volumeGridDirty = false
+            lastVolumeBuildMS = 0
             return
         }
         var gridInfo = makeGridInfo(for: pointCloud)
-        _ = prepareScalarGrid(pointCloud: pointCloud,
-                              gridInfo: &gridInfo,
-                              buffers: buffers,
-                              commandBuffer: commandBuffer)
+        let ok = prepareScalarGrid(pointCloud: pointCloud,
+                                   gridInfo: &gridInfo,
+                                   buffers: buffers,
+                                   commandBuffer: commandBuffer)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        let t1 = CACurrentMediaTime()
+        lastVolumeBuildMS = ok ? (t1 - t0) * 1000.0 : 0
         volumeGridDirty = false
     }
 
@@ -756,6 +762,7 @@ class Renderer: NSObject, MTKViewDelegate {
             meshNeedsRebuild = false
             return
         }
+        let t0 = CACurrentMediaTime()
 
         ensureVoxelResources(pointCount: pointCloud.count)
         guard let buffers = meshBuffers(),
@@ -800,6 +807,8 @@ class Renderer: NSObject, MTKViewDelegate {
         } else {
             meshVertexCount = 0
         }
+        let t1 = CACurrentMediaTime()
+        lastMeshBuildMS = (t1 - t0) * 1000.0
         meshNeedsRebuild = false
         volumeGridDirty = false
     }

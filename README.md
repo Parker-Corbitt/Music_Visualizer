@@ -94,10 +94,10 @@ Goal: Get isosurfaces working for both modes.
 - Implement Marching Tetrahedrons (first, simplest)
 - Add ability to extract surfaces from:
   - Song Mode volumes
-  - Trend Mode volume
+  - Timeline Mode volume
 - Compute normals + basic Phong shading
 - Create UI for:
-  - Song Mode ↔ Trend Mode toggle
+  - Song Mode ↔ Timeline Mode toggle
   - Isovalue slider
 - Begin implementing Dual Contouring
   

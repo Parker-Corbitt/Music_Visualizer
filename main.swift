@@ -289,7 +289,9 @@ class PointCloudControlBar: NSView {
         let voxels = stats.voxelCount
         let grid = stats.gridResolution
         let verts = stats.meshVertices
-        debugLabel.stringValue = "FPS: \(fpsText)  Voxels: \(voxels)  Grid: \(grid.x)x\(grid.y)x\(grid.z)  Vertices: \(verts)"
+        let meshMs = stats.meshMs > 0 ? String(format: "%.1f ms", stats.meshMs) : "--"
+        let volMs = stats.volumeMs > 0 ? String(format: "%.1f ms", stats.volumeMs) : "--"
+        debugLabel.stringValue = "FPS: \(fpsText)  Voxels: \(voxels)  Grid: \(grid.x)x\(grid.y)x\(grid.z)  Vertices: \(verts)  Mesh: \(meshMs)  Volume: \(volMs)"
     }
 
     @objc private func openFile(_ sender: Any?) {
